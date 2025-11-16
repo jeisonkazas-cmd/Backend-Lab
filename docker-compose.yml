@@ -1,0 +1,17 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: lab_fisica_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: lab_user
+      POSTGRES_PASSWORD: lab_pass
+      POSTGRES_DB: lab_fisica
+      POSTGRES_INITDB_ARGS: "--auth=md5"
+    ports:
+      - "5433:5432"
+    volumes:
+      - ./db/data:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d
