@@ -1,33 +1,37 @@
-# Backend (Express + TypeScript) — OIDC + PostgreSQL skeleton
+# Backend (Express + TypeScript)
 
-This repository contains a minimal backend skeleton for the project: TypeScript + Express, PostgreSQL (docker-compose), and OIDC-based delegated authentication with Microsoft Entra ID (OpenID Connect Authorization Code Flow).
+Este repositorio contiene un backend mínimo con **TypeScript + Express** y **PostgreSQL**, con autenticación OIDC usando Microsoft Entra ID.
 
-What was added:
-- DB connection and initialization (`src/db.ts`) — creates `users` table.
-- OIDC login and callback using `openid-client` (`src/auth/oidc.ts`).
-- Session middleware and simple user routes (`src/routes/user.ts`).
-- Example `.env.example` and dev scripts in `package.json`.
+## Requisitos
 
-Quick setup (local development):
+- Docker y Docker Compose
+- Node.js (v18+ recomendado)
+- Credenciales OIDC y `SESSION_SECRET`
 
-1. Copy `.env.example` to `.env` and fill values (especially OIDC_* and SESSION_SECRET).
+## Instalación y ejecución
 
-2. Start PostgreSQL (the project contains a `docker-compose.yml` with a postgres service):
+1. Copia el archivo de ejemplo de variables de entorno
 
-   # using PowerShell
-   docker-compose up -d
+2. Levanta la base de datos con Docker Compose:
 
-3. Install dependencies:
+```bash
+docker-compose up -d
+```
 
-   npm install
+3. Instala dependencias:
 
-4. Start dev server (with automatic restart):
+```bash
+npm install
+```
 
-   npm run dev
+4. Ejecuta el servidor en modo desarrollo:
 
-5. Visit `http://localhost:3000/auth/login` to start the Microsoft Entra ID login flow (after configuring a proper App Registration).
+```bash
+npm run dev
+```
 
-Notes and next steps:
-- This skeleton uses in-memory session store (express-session MemoryStore). For production use replace with a persistent store (Redis, database, etc.) and enable secure cookies + HTTPS.
-- Ensure the OIDC app registration includes the redirect URI configured in `OIDC_REDIRECT_URI`.
-- Add stronger role management and migrations (e.g., with a migration tool). The current init simply ensures the `users` table exists.
+5. Accede a la aplicación en:
+
+```
+http://localhost:3000/auth/login
+```
