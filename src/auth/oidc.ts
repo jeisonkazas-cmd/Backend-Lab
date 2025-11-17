@@ -1,4 +1,3 @@
-// src/auth/oidc.ts
 import { Router } from "express";
 import { Issuer, generators } from "openid-client";
 import type { Client } from "openid-client";
@@ -30,13 +29,15 @@ router.get("/login", (req, res) => {
   const codeVerifier = generators.codeVerifier();
   const codeChallenge = generators.codeChallenge(codeVerifier);
 
-  // guardamos el verifier en la sesión de ESTE usuario
   req.session.codeVerifier = codeVerifier;
+
+  const loginHint = req.query.login_hint as string | undefined;
 
   const url = client.authorizationUrl({
     scope: "openid profile email",
     code_challenge: codeChallenge,
     code_challenge_method: "S256",
+    ...(loginHint ? { login_hint: loginHint } : {}),
   });
 
   res.redirect(url);
@@ -77,11 +78,10 @@ router.get("/callback", async (req, res) => {
     } else if (email?.startsWith("estudiante@")) {
       rol = "Estudiante";
     }
-    // si mañana quieres un admin:
+    // si se agrega un admin:
     // else if (email === "admin@...") rol = "Administrador";
 
     // 2) Crear / actualizar usuario en la BD
-    // IMPORTANTE: en tu schema, id_msentra_id debe ser PK o UNIQUE
     await pool.query(
       `INSERT INTO usuarios (id_msentra_id, correo, nombre, rol_plataforma)
        VALUES ($1, $2, $3, $4)
@@ -109,11 +109,33 @@ router.get("/callback", async (req, res) => {
     };
 
     // 5) Redirigir al frontend
-    res.redirect("http://localhost:5173"); // ajusta la ruta que uses
+    const FRONTEND_BASE_URL = "http://localhost:5173";
+    if (user.rol_plataforma === "Docente") {
+      res.redirect(`${FRONTEND_BASE_URL}/docente`);
+    } else {
+      // por defecto Estudiante
+      res.redirect(`${FRONTEND_BASE_URL}/estudiante`);
+    }
   } catch (err) {
     console.error("Error en callback OIDC:", err);
     res.status(500).send("Error en autenticación");
   }
 });
+
+router.get("/me", (req, res) => {
+  if (!req.session.user) {
+    return res.status(401).json({ error: "No autenticado" });
+  }
+
+  return res.json(req.session.user);
+});
+
+router.post("/logout", (req, res) => {
+  req.session.destroy(() => {
+    res.clearCookie("connect.sid"); // nombre por defecto de la cookie
+    res.status(200).json({ ok: true });
+  });
+});
+
 
 export default router;

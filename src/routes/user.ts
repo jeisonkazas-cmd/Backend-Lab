@@ -1,6 +1,6 @@
-// src/routes/user.ts
 import { Router } from "express";
 import { pool } from "../db";
+import { requireRole } from "../middleware/auth";
 
 const router = Router();
 
@@ -27,5 +27,29 @@ router.get("/me", async (req, res) => {
     res.status(500).json({ error: "Error interno del servidor" });
   }
 });
+
+// /mis-cursos
+router.get(
+  "/mis-cursos",
+  requireRole(["Docente", "Administrador"]),
+  async (req, res) => {
+    try {
+      const id_usuario = req.session.user!.id_msentra_id;
+
+      const result = await pool.query(
+        `SELECT id_curso, nombre, codigo, periodo
+         FROM cursos
+         WHERE creado_por_id = $1
+         ORDER BY fecha_creacion ASC`,
+        [id_usuario]
+      );
+
+      res.json(result.rows);
+    } catch (err) {
+      console.error("Error listando cursos del docente:", err);
+      res.status(500).json({ error: "Error interno al listar cursos" });
+    }
+  }
+);
 
 export default router;

@@ -142,7 +142,7 @@ CREATE TABLE IF NOT EXISTS informes (
                     REFERENCES simulaciones(id_simulacion)
                     ON DELETE SET NULL,
     titulo          VARCHAR(200),
-    archivo_url     TEXT,         -- ruta a archivo (S3, Azure Blob, etc.)
+    archivo_url     TEXT,         -- ruta a archivo (Azure)
     contenido_texto TEXT,
     estado          VARCHAR(30) NOT NULL DEFAULT 'entregado'
                     CHECK (estado IN ('borrador','entregado','calificado')),

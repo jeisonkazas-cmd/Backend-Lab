@@ -1,4 +1,3 @@
-// src/routes/informes.ts
 import { Router } from "express";
 import { pool } from "../db";
 import { requireAuth, requireRole } from "../middleware/auth";
@@ -7,8 +6,7 @@ const router = Router();
 
 /**
  * POST /api/practicas/:id_practica/informes
- * Estudiante sube un informe para una práctica.
- * body: { titulo?, archivo_url?, contenido_texto? }
+ * Estudiante sube un informe.
  */
 router.post(
   "/practicas/:id_practica/informes",
@@ -20,7 +18,6 @@ router.post(
 
       const id_usuario = req.session.user!.id_msentra_id;
 
-      // Validación mínima
       if (!archivo_url && !contenido_texto) {
         return res.status(400).json({
           error: "Debes enviar al menos archivo_url o contenido_texto",
@@ -76,6 +73,61 @@ router.get("/mis-informes", requireRole(["Estudiante"]), async (req, res) => {
 });
 
 /**
+ * GET /api/informes/:id_informe
+ * Devuelve el detalle de un informe.
+ * - Estudiante: solo si es el dueño del informe
+ * - Docente/Admin: pueden ver cualquiera
+ */
+router.get("/informes/:id_informe", requireAuth, async (req, res) => {
+  try {
+    const { id_informe } = req.params;
+    const user = req.session.user!;
+    const id_usuario = user.id_msentra_id;
+    const rol = user.rol_plataforma;
+
+    const result = await pool.query(
+      `
+      SELECT 
+        i.id_informe,
+        i.id_practica,
+        i.id_usuario,
+        i.titulo,
+        i.archivo_url,
+        i.contenido_texto,
+        i.estado,
+        i.fecha_entrega,
+        i.nota,
+        i.retroalimentacion,
+        u.nombre       AS nombre_estudiante,
+        p.titulo       AS titulo_practica,
+        p.configuracion_simulacion
+      FROM informes i
+      JOIN usuarios u ON u.id_msentra_id = i.id_usuario
+      JOIN practicas p ON p.id_practica = i.id_practica
+      WHERE i.id_informe = $1
+      `,
+      [id_informe]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Informe no encontrado" });
+    }
+
+    const informe = result.rows[0];
+
+    // Si es estudiante, solo puede ver su propio informe
+    if (rol === "Estudiante" && informe.id_usuario !== id_usuario) {
+      return res.status(403).json({ error: "No autorizado" });
+    }
+
+    res.json(informe);
+  } catch (err) {
+    console.error("Error obteniendo informe:", err);
+    res.status(500).json({ error: "Error interno al obtener informe" });
+  }
+});
+
+/**
  * GET /api/practicas/:id_practica/informes
  * Docente/Admin consulta informes de una práctica.
  */
@@ -105,9 +157,48 @@ router.get(
 );
 
 /**
+ * GET /api/practicas/:id_practica/informes/:id_usuario
+ * Devuelve el ÚLTIMO informe de ese estudiante en esa práctica.
+ * Lo usará la pantalla InformeEstudiante.jsx
+ */
+router.get(
+  "/practicas/:id_practica/informes/:id_usuario",
+  requireRole(["Docente", "Administrador"]),
+  async (req, res) => {
+    try {
+      const { id_practica, id_usuario } = req.params;
+
+      const result = await pool.query(
+        `SELECT i.id_informe, i.id_practica, i.id_usuario,
+                u.nombre, u.correo,
+                i.titulo, i.archivo_url, i.contenido_texto,
+                i.estado, i.fecha_entrega, i.nota, i.retroalimentacion
+         FROM informes i
+         JOIN usuarios u ON u.id_msentra_id = i.id_usuario
+         WHERE i.id_practica = $1
+           AND i.id_usuario  = $2
+         ORDER BY i.fecha_entrega DESC
+         LIMIT 1`,
+        [id_practica, id_usuario]
+      );
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({
+          error: "No hay informe para este estudiante en esta práctica",
+        });
+      }
+
+      res.json(result.rows[0]);
+    } catch (err) {
+      console.error("Error obteniendo informe:", err);
+      res.status(500).json({ error: "Error interno al obtener informe" });
+    }
+  }
+);
+
+/**
  * PUT /api/informes/:id_informe/calificar
- * Docente/Admin califica un informe y deja retroalimentación.
- * body: { nota, retroalimentacion }
+ * Docente/Admin califica un informe.
  */
 router.put(
   "/informes/:id_informe/calificar",
