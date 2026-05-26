@@ -25,7 +25,8 @@
     "openid-client": "^5.2.0",
     "pg": "^8.11.0",
     "class-validator": "^0.14.0",
-    "reflect-metadata": "^0.1.13"
+    "reflect-metadata": "^0.1.13",
+    "typescript": "^5.6.2"
   },
   "devDependencies": {
     "@types/cookie-parser": "^1.4.3",
@@ -36,7 +37,6 @@
     "@types/multer": "^2.0.0",
     "@types/node": "^20.4.2",
     "@types/pg": "^8.15.6",
-    "ts-node-dev": "^2.0.0",
-    "typescript": "^5.6.2"
+    "ts-node-dev": "^2.0.0"
   }
 }
