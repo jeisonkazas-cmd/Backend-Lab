@@ -1,6 +1,8 @@
 import { Pool } from "pg";
 import dotenv from "dotenv";
+import path from "path";
 
+dotenv.config({ path: path.resolve(__dirname, "../.env.local") });
 dotenv.config();
 
 // Soporta Vercel Postgres (POSTGRES_URL) o DATABASE_URL personalizado
@@ -12,6 +14,5 @@ if (!connectionString) {
 
 export const pool = new Pool({
   connectionString,
-  // Para Vercel Postgres, desabilitar SSL si es necesario
-  ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : false,
+  ssl: { rejectUnauthorized: false },
 });
