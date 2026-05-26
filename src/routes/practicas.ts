@@ -4,6 +4,9 @@ import { requireAuth, requireRole } from "../middleware/auth";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
+import { asyncHandler } from "../utils/async-handler";
+import { practicaController } from "../controllers/practica-controller";
+import { validateIdParam, validateBodyNotEmpty, validateRequiredFields } from "../middleware/validation";
 
 // Carpeta donde se guardarán los PDFs
 const uploadDir = path.join(__dirname, "..", "..", "uploads", "practicas");
@@ -135,11 +138,11 @@ router.post(
 
       // 2) Si no existe, crear un curso "por defecto"
       if (cursoResult.rows.length === 0) {
-        console.log("📘 Docente sin cursos, creando curso por defecto...");
+        console.log("Creating default course...");
 
         const codigo = `LAB-FISICA-${Date.now()}`;
         const nombre = "Laboratorio de Física";
-        const periodo = null; // puedes cambiarlo a '2025-1' si quieres
+        const periodo = null;
 
         cursoResult = await pool.query(
           `
@@ -150,9 +153,9 @@ router.post(
           [codigo, nombre, periodo, creado_por_id]
         );
 
-        console.log("✅ Curso por defecto creado:", cursoResult.rows[0]);
+        console.log("Course created:", cursoResult.rows[0]);
       } else {
-        console.log(" Usando curso existente:", cursoResult.rows[0]);
+        console.log("Using existing course:", cursoResult.rows[0]);
       }
 
       const id_curso = cursoResult.rows[0].id_curso;
