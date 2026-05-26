@@ -3,11 +3,11 @@ import { pool } from "../src/db";
 async function cleanDb() {
   const client = await pool.connect();
   try {
-    console.log("Eliminando tablas viejas...");
+    console.log("Removing old tables...");
     await client.query("DROP TABLE IF EXISTS foro_posts CASCADE;");
     await client.query("DROP TABLE IF EXISTS estudiantes_grupos CASCADE;");
     await client.query("DROP TABLE IF EXISTS grupos CASCADE;");
-    console.log("Tablas viejas eliminadas");
+    console.log("Old tables removed");
   } catch (err) {
     console.error("Error:", err);
     process.exit(1);

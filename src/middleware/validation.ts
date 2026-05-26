@@ -1,14 +1,6 @@
-/**
- * Middlewares de validación
- * Valida y sanitiza inputs antes de que lleguen a los controladores
- */
-
 import { Request, Response, NextFunction } from 'express';
 import { ValidationError } from '../utils/errors';
 
-/**
- * Valida que un ID sea válido (número positivo entero)
- */
 export const validateIdParam = (paramName: string = 'id') => 
   (req: Request, res: Response, next: NextFunction) => {
     const id = req.params[paramName];
@@ -21,9 +13,6 @@ export const validateIdParam = (paramName: string = 'id') =>
     next();
   };
 
-/**
- * Valida que el body no esté vacío
- */
 export const validateBodyNotEmpty = (req: Request, res: Response, next: NextFunction) => {
   if (!req.body || Object.keys(req.body).length === 0) {
     throw new ValidationError('El cuerpo de la solicitud no puede estar vacío');
@@ -31,9 +20,6 @@ export const validateBodyNotEmpty = (req: Request, res: Response, next: NextFunc
   next();
 };
 
-/**
- * Valida que ciertos campos estén presentes en el body
- */
 export const validateRequiredFields = (fields: string[]) => 
   (req: Request, res: Response, next: NextFunction) => {
     const missingFields = fields.filter((field) => !req.body[field]);

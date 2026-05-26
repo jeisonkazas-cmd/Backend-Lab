@@ -8,15 +8,12 @@ import { asyncHandler } from "../utils/async-handler";
 import { practicaController } from "../controllers/practica-controller";
 import { validateIdParam, validateBodyNotEmpty, validateRequiredFields } from "../middleware/validation";
 
-// Carpeta donde se guardarán los PDFs
 const uploadDir = path.join(__dirname, "..", "..", "uploads", "practicas");
 
-// Asegurarse de que exista
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
 
-// Configuración de multer
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => {
     cb(null, uploadDir);
@@ -31,7 +28,6 @@ const storage = multer.diskStorage({
 const upload = multer({
   storage,
   fileFilter: (_req, file, cb) => {
-    // Solo PDFs
     if (file.mimetype !== "application/pdf") {
       return cb(new Error("Solo se permiten archivos PDF"));
     }
@@ -39,13 +35,9 @@ const upload = multer({
   },
 });
 
-
 const router = Router();
 
-/**
- * GET /api/practicas
- * Lista todas las prácticas (por ahora sin filtrar por rol).
- */
+
 router.get("/practicas", requireAuth, async (_req, res) => {
   try {
     const result = await pool.query(
@@ -57,15 +49,11 @@ router.get("/practicas", requireAuth, async (_req, res) => {
 
     res.json(result.rows);
   } catch (err) {
-    console.error("Error listando prácticas:", err);
+    console.error("Error listing practices:", err);
     res.status(500).json({ error: "Error interno al listar prácticas" });
   }
 });
 
-/**
- * GET /api/practicas/:id_practica
- * Detalle de una práctica.
- */
 router.get("/practicas/:id_practica", requireAuth, async (req, res) => {
   try {
     const { id_practica } = req.params;
@@ -84,21 +72,11 @@ router.get("/practicas/:id_practica", requireAuth, async (req, res) => {
 
     res.json(result.rows[0]);
   } catch (err) {
-    console.error("Error obteniendo práctica:", err);
+    console.error("Error getting practice:", err);
     res.status(500).json({ error: "Error interno al obtener práctica" });
   }
 });
 
-/**
- * POST /api/practicas
- * Crear práctica nueva (solo Docente o Administrador).
- * body: { titulo, descripcion, estado?, fecha_cierre?, configuracion_simulacion? }
- *
- * Aquí:
- *  1) busca un curso del docente
- *  2) si no hay, crea uno por defecto
- *  3) usa ese id_curso en el INSERT
- */
 router.post(
   "/practicas",
   requireRole(["Docente", "Administrador"]),

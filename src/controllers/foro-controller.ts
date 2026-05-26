@@ -1,16 +1,7 @@
-/**
- * Controlador de Foro
- * Orquesta las solicitudes HTTP con la lógica de negocio
- */
-
 import { Request, Response } from 'express';
 import { foroService } from '../services/foro-service';
 
 class ForoController {
-  /**
-   * GET /api/foro/practica/:practicaId
-   * Obtiene posts de una práctica
-   */
   async getPostsByPractica(req: Request, res: Response): Promise<void> {
     const { practicaId } = req.params;
 
@@ -23,10 +14,6 @@ class ForoController {
     });
   }
 
-  /**
-   * GET /api/foro/:postId
-   * Obtiene un post específico e incrementa sus visitas
-   */
   async getPostById(req: Request, res: Response): Promise<void> {
     const { postId } = req.params;
 
@@ -38,10 +25,6 @@ class ForoController {
     });
   }
 
-  /**
-   * GET /api/foro/recientes
-   * Obtiene posts recientes del sistema
-   */
   async getRecentPosts(req: Request, res: Response): Promise<void> {
     const limit = req.query.limit ? Number(req.query.limit) : 10;
 
@@ -54,10 +37,6 @@ class ForoController {
     });
   }
 
-  /**
-   * POST /api/foro
-   * Crea un nuevo post
-   */
   async createPost(req: Request, res: Response): Promise<void> {
     const post = await foroService.createPost(req.body);
 
@@ -68,10 +47,6 @@ class ForoController {
     });
   }
 
-  /**
-   * PUT /api/foro/:postId
-   * Actualiza un post
-   */
   async updatePost(req: Request, res: Response): Promise<void> {
     const { postId } = req.params;
 
@@ -84,10 +59,6 @@ class ForoController {
     });
   }
 
-  /**
-   * PATCH /api/foro/:postId/respuesta
-   * Incrementa contador de respuestas de un post
-   */
   async addResponse(req: Request, res: Response): Promise<void> {
     const { postId } = req.params;
 
@@ -100,10 +71,6 @@ class ForoController {
     });
   }
 
-  /**
-   * GET /api/foro/autor/:autor
-   * Obtiene posts de un autor específico
-   */
   async getPostsByAutor(req: Request, res: Response): Promise<void> {
     const { autor } = req.params;
 

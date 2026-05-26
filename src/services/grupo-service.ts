@@ -1,8 +1,3 @@
-/**
- * Servicio de Grupos
- * Contiene la lógica de negocio relacionada con grupos
- */
-
 import { grupoRepository, Grupo } from '../repositories/grupo-repository';
 import { ValidationError } from '../utils/errors';
 
@@ -25,41 +20,25 @@ export interface UpdateGrupoData {
 }
 
 class GrupoService {
-  /**
-   * Obtiene todos los grupos
-   */
   async getAllGrupos(): Promise<Grupo[]> {
     return grupoRepository.findAll();
   }
 
-  /**
-   * Obtiene un grupo específico
-   */
   async getGrupoById(grupoId: number | string): Promise<Grupo> {
     return grupoRepository.findById(grupoId);
   }
 
-  /**
-   * Obtiene grupos activos
-   */
   async getActiveGrupos(): Promise<Grupo[]> {
     return grupoRepository.findActive();
   }
 
-  /**
-   * Obtiene grupos de un docente
-   */
   async getGruposByDocente(docente: string): Promise<Grupo[]> {
     return grupoRepository.findByDocente(docente);
   }
 
-  /**
-   * Crea un nuevo grupo
-   */
   async createGrupo(grupoData: CreateGrupoData): Promise<Grupo> {
     const { nombre, docente, semester, horario, salon, activo } = grupoData;
 
-    // Validación de lógica de negocio
     if (!nombre || !docente) {
       throw new ValidationError('Nombre y docente son obligatorios');
     }
@@ -75,9 +54,6 @@ class GrupoService {
 
     return grupoRepository.create(data);
   }
-
-  /**
-   * Actualiza un grupo
    */
   async updateGrupo(grupoId: number | string, grupoData: UpdateGrupoData): Promise<Grupo> {
     // Primero verificar que existe
@@ -100,11 +76,8 @@ class GrupoService {
     return grupoRepository.update(grupoId, filteredData);
   }
 
-  /**
-   * Obtiene cantidad de estudiantes en un grupo
-   */
   async getEstudianteCount(grupoId: number | string): Promise<number> {
-    await grupoRepository.findById(grupoId); // Verificar que existe
+    await grupoRepository.findById(grupoId);
     return grupoRepository.countEstudiantes(Number(grupoId));
   }
 }

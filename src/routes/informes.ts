@@ -4,10 +4,6 @@ import { requireAuth, requireRole } from "../middleware/auth";
 
 const router = Router();
 
-/**
- * POST /api/practicas/:id_practica/informes
- * Estudiante sube un informe.
- */
 router.post(
   "/practicas/:id_practica/informes",
   requireRole(["Estudiante"]),
@@ -41,16 +37,12 @@ router.post(
 
       res.status(201).json(result.rows[0]);
     } catch (err) {
-      console.error("Error subiendo informe:", err);
+      console.error("Error uploading report:", err);
       res.status(500).json({ error: "Error interno al subir informe" });
     }
   }
 );
 
-/**
- * GET /api/mis-informes
- * Estudiante consulta todos sus informes.
- */
 router.get("/mis-informes", requireRole(["Estudiante"]), async (req, res) => {
   try {
     const id_usuario = req.session.user!.id_msentra_id;

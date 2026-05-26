@@ -1,6 +1,6 @@
 /**
- * Script de migración para crear todas las tablas en la BD
- * Ejecutar: npx ts-node scripts/migrate.ts
+ * Database migration script
+ * Execute: npx ts-node scripts/migrate.ts
  */
 
 import { pool } from "../src/db";
@@ -179,37 +179,37 @@ async function runMigrations() {
   const client = await pool.connect();
   
   try {
-    console.log("🚀 Iniciando migraciones de base de datos...\n");
+    console.log("Starting database migrations...\n");
 
     for (let i = 0; i < migrations.length; i++) {
       try {
-        console.log(`⏳ Ejecutando migración ${i + 1}/${migrations.length}...`);
+        console.log(`Executing migration ${i + 1}/${migrations.length}...`);
         await client.query(migrations[i]);
-        console.log(`✅ Migración ${i + 1} completada\n`);
+        console.log(`Migration ${i + 1} completed\n`);
       } catch (err: any) {
         console.error(`Error en migración ${i + 1}:`, err.message);
         throw err;
       }
     }
 
-    console.log("Todas las migraciones completadas exitosamente!");
-    console.log("\nTablas creadas:");
-    console.log("  • usuarios");
-    console.log("  • roles");
-    console.log("  • usuarios_roles");
-    console.log("  • grupos");
-    console.log("  • grupos_estudiantes");
-    console.log("  • grupos_docentes");
-    console.log("  • practicas");
-    console.log("  • simulaciones");
-    console.log("  • informes");
-    console.log("  • retroalimentaciones");
-    console.log("  • foros");
-    console.log("  • mensajes_foro");
-    console.log("  • notificaciones");
+    console.log("All migrations completed successfully!");
+    console.log("\nTables created:");
+    console.log("  - usuarios");
+    console.log("  - roles");
+    console.log("  - usuarios_roles");
+    console.log("  - grupos");
+    console.log("  - grupos_estudiantes");
+    console.log("  - grupos_docentes");
+    console.log("  - practicas");
+    console.log("  - simulaciones");
+    console.log("  - informes");
+    console.log("  - retroalimentaciones");
+    console.log("  - foros");
+    console.log("  - mensajes_foro");
+    console.log("  - notificaciones");
 
   } catch (err) {
-    console.error("Error durante migraciones:", err);
+    console.error("Error during migrations:", err);
     process.exit(1);
   } finally {
     client.release();

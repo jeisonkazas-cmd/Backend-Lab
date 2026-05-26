@@ -1,8 +1,3 @@
-/**
- * Servicio de Prácticas
- * Contiene la lógica de negocio relacionada con prácticas
- */
-
 import { practicaRepository, Practica } from '../repositories/practica-repository';
 import { grupoRepository } from '../repositories/grupo-repository';
 import { ValidationError } from '../utils/errors';
@@ -31,26 +26,15 @@ export interface UpdatePracticaData {
 }
 
 class PracticaService {
-  /**
-   * Obtiene todas las prácticas de un grupo
-   */
   async getPracticasByGrupo(grupoId: number): Promise<Practica[]> {
-    // Verificar que el grupo existe
     await grupoRepository.findById(grupoId);
-
     return practicaRepository.findByGrupoId(grupoId);
   }
 
-  /**
-   * Obtiene detalle de una práctica
-   */
   async getPracticaById(practicaId: number | string): Promise<Practica> {
     return practicaRepository.findById(practicaId);
   }
 
-  /**
-   * Crea una nueva práctica
-   */
   async createPractica(practicaData: CreatePracticaData): Promise<Practica> {
     const {
       grupo_id,
@@ -64,15 +48,12 @@ class PracticaService {
       instrucciones,
     } = practicaData;
 
-    // Validación de campos obligatorios
     if (!grupo_id || !titulo) {
       throw new ValidationError('grupo_id y titulo son obligatorios');
     }
 
-    // Verificar que el grupo existe
     await grupoRepository.findById(grupo_id);
 
-    // Validar tipo si se proporciona
     const validTypes = ['virtual', 'presencial', 'remota'];
     if (tipo && !validTypes.includes(tipo)) {
       throw new ValidationError(

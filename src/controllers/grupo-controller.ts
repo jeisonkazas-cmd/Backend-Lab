@@ -1,16 +1,7 @@
-/**
- * Controlador de Grupos
- * Orquesta las solicitudes HTTP con la lógica de negocio
- */
-
 import { Request, Response } from 'express';
 import { grupoService } from '../services/grupo-service';
 
 class GrupoController {
-  /**
-   * GET /api/grupos
-   * Obtiene todos los grupos
-   */
   async getAllGrupos(req: Request, res: Response): Promise<void> {
     const grupos = await grupoService.getAllGrupos();
 
@@ -21,10 +12,6 @@ class GrupoController {
     });
   }
 
-  /**
-   * GET /api/grupos/activos
-   * Obtiene solo grupos activos
-   */
   async getActiveGrupos(req: Request, res: Response): Promise<void> {
     const grupos = await grupoService.getActiveGrupos();
 
@@ -35,10 +22,6 @@ class GrupoController {
     });
   }
 
-  /**
-   * GET /api/grupos/:grupoId
-   * Obtiene un grupo específico con información adicional
-   */
   async getGrupoById(req: Request, res: Response): Promise<void> {
     const { grupoId } = req.params;
 
@@ -54,10 +37,6 @@ class GrupoController {
     });
   }
 
-  /**
-   * GET /api/grupos/docente/:docente
-   * Obtiene grupos de un docente específico
-   */
   async getGruposByDocente(req: Request, res: Response): Promise<void> {
     const { docente } = req.params;
 
@@ -70,10 +49,6 @@ class GrupoController {
     });
   }
 
-  /**
-   * POST /api/grupos
-   * Crea un nuevo grupo
-   */
   async createGrupo(req: Request, res: Response): Promise<void> {
     const grupo = await grupoService.createGrupo(req.body);
 
@@ -84,10 +59,6 @@ class GrupoController {
     });
   }
 
-  /**
-   * PUT /api/grupos/:grupoId
-   * Actualiza un grupo
-   */
   async updateGrupo(req: Request, res: Response): Promise<void> {
     const { grupoId } = req.params;
 
