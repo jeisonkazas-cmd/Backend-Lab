@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
 import { pool } from "../db";
+import jwt from "jsonwebtoken";
 
 function getBearerToken(req: Request): string | null {
   const header = req.headers.authorization;
@@ -15,6 +16,14 @@ function getSupabaseUrl(): string {
     throw new Error("SUPABASE_URL no está definida");
   }
   return url.replace(/\/$/, "");
+}
+
+function getSupabaseJwtSecret(): string | null {
+  return (
+    process.env.SUPABASE_JWT_SECRET ||
+    process.env.POSTGRES_SUPABASE_JWT_SECRET ||
+    null
+  );
 }
 
 let joseModulePromise: Promise<any> | null = null;
@@ -44,18 +53,32 @@ export async function requireSupabaseAuth(
     return res.status(401).json({ error: "No autenticado" });
   }
 
-  const supabaseUrl = getSupabaseUrl();
-  const issuer = process.env.SUPABASE_JWT_ISSUER || `${supabaseUrl}/auth/v1`;
   const audience = process.env.SUPABASE_JWT_AUDIENCE || "authenticated";
 
   try {
-    const { jwtVerify } = await getJose();
-    const jwksKeySet = await getJwks();
+    const secret = getSupabaseJwtSecret();
 
-    const { payload } = await jwtVerify(token, jwksKeySet, {
-      issuer,
-      audience,
-    });
+    let payload: any;
+
+    if (secret) {
+      payload = jwt.verify(token, secret, {
+        algorithms: ["HS256"],
+        audience,
+      });
+    } else {
+      const supabaseUrl = getSupabaseUrl();
+      const issuer = process.env.SUPABASE_JWT_ISSUER || `${supabaseUrl}/auth/v1`;
+
+      const { jwtVerify } = await getJose();
+      const jwksKeySet = await getJwks();
+
+      const verified = await jwtVerify(token, jwksKeySet, {
+        issuer,
+        audience,
+      });
+
+      payload = verified.payload;
+    }
 
     const sub = payload.sub;
     if (!sub || typeof sub !== "string") {
