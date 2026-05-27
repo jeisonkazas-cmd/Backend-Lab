@@ -11,9 +11,9 @@ function getBearerToken(req: Request): string | null {
 }
 
 function getSupabaseUrl(): string {
-  const url = process.env.SUPABASE_URL;
+  const url = process.env.POSTGRES_SUPABASE_URL;
   if (!url) {
-    throw new Error("SUPABASE_URL no está definida");
+    throw new Error("POSTGRES_SUPABASE_URL no está definida");
   }
   return url.replace(/\/$/, "");
 }
@@ -79,7 +79,7 @@ export async function requireSupabaseAuth(
       });
     } else {
       // Para RS256/otros algoritmos, validamos contra JWKS remoto.
-      // Esto requiere SUPABASE_URL para construir el endpoint /auth/v1/keys.
+      // Esto requiere POSTGRES_SUPABASE_URL para construir el endpoint /auth/v1/keys.
       let supabaseUrl: string;
       try {
         supabaseUrl = getSupabaseUrl();
@@ -87,7 +87,7 @@ export async function requireSupabaseAuth(
         return res.status(500).json({
           error: "Configuración incompleta",
           message:
-            "SUPABASE_URL no está definida (necesaria para validar tokens RS256 via JWKS)",
+            "POSTGRES_SUPABASE_URL no está definida (necesaria para validar tokens RS256 via JWKS)",
         });
       }
 
