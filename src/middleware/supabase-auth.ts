@@ -60,13 +60,37 @@ export async function requireSupabaseAuth(
 
     let payload: any;
 
-    if (secret) {
+    const decoded = jwt.decode(token, { complete: true }) as any;
+    const alg = decoded?.header?.alg;
+
+    // Si el token está firmado con HS256, podemos validar con el JWT_SECRET.
+    if (alg === "HS256") {
+      if (!secret) {
+        return res.status(500).json({
+          error: "Configuración incompleta",
+          message:
+            "Falta SUPABASE_JWT_SECRET o POSTGRES_SUPABASE_JWT_SECRET para validar tokens HS256",
+        });
+      }
+
       payload = jwt.verify(token, secret, {
         algorithms: ["HS256"],
         audience,
       });
     } else {
-      const supabaseUrl = getSupabaseUrl();
+      // Para RS256/otros algoritmos, validamos contra JWKS remoto.
+      // Esto requiere SUPABASE_URL para construir el endpoint /auth/v1/keys.
+      let supabaseUrl: string;
+      try {
+        supabaseUrl = getSupabaseUrl();
+      } catch {
+        return res.status(500).json({
+          error: "Configuración incompleta",
+          message:
+            "SUPABASE_URL no está definida (necesaria para validar tokens RS256 via JWKS)",
+        });
+      }
+
       const issuer = process.env.SUPABASE_JWT_ISSUER || `${supabaseUrl}/auth/v1`;
 
       const { jwtVerify } = await getJose();
