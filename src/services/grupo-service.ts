@@ -54,7 +54,7 @@ class GrupoService {
 
     return grupoRepository.create(data);
   }
-   */
+
   async updateGrupo(grupoId: number | string, grupoData: UpdateGrupoData): Promise<Grupo> {
     // Primero verificar que existe
     await grupoRepository.findById(grupoId);

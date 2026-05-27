@@ -4,6 +4,8 @@ import dotenv from "dotenv";
 import cors from "cors";
 import oidcRoutes from "./auth/oidc";
 import userRoutes from "./routes/user";
+import apiAuthRoutes from "./routes/api-auth";
+import adminRoutes from "./routes/admin";
 import practicasRoutes from "./routes/practicas";
 import informesRoutes from "./routes/informes";
 import foroRoutes from "./routes/foro";
@@ -16,10 +18,12 @@ dotenv.config();
 
 const app = express();
 
-const corsOrigin = process.env.CORS_ORIGIN || "*";
+const corsOrigin = process.env.CORS_ORIGIN || "http://localhost:5173";
 app.use(
   cors({
-    origin: corsOrigin,
+    // Nota: con credentials=true, no se puede usar "*" literal.
+    // Si se configura "*", reflejamos el Origin del request.
+    origin: corsOrigin === "*" ? true : corsOrigin,
     credentials: true,
   })
 );
@@ -41,7 +45,9 @@ app.use(
 );
 
 app.use("/auth", oidcRoutes);
+app.use("/api/auth", apiAuthRoutes);
 app.use("/api/user", userRoutes);
+app.use("/api/admin", adminRoutes);
 app.use("/api", practicasRoutes);
 app.use("/api", informesRoutes);
 app.use("/api/foro", foroRoutes);
