@@ -26,6 +26,45 @@ function getSupabaseJwtSecret(): string | null {
   );
 }
 
+function getSupabaseApiKey(): string | null {
+  return (
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_ANON_KEY ||
+    process.env.POSTGRES_SUPABASE_SERVICE_ROLE_KEY ||
+    null
+  );
+}
+
+async function validateTokenWithSupabaseAuthApi(token: string) {
+  const supabaseUrl = getSupabaseUrl();
+  const apiKey = getSupabaseApiKey();
+
+  if (!apiKey) {
+    throw new Error("Falta SUPABASE_SERVICE_ROLE_KEY o SUPABASE_ANON_KEY para validar token con Supabase Auth");
+  }
+
+  const response = await fetch(`${supabaseUrl}/auth/v1/user`, {
+    headers: {
+      apikey: apiKey,
+      authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Supabase Auth rechazo el token: ${response.status}`);
+  }
+
+  const user = await response.json() as { id?: string; email?: string };
+  if (!user.id) {
+    throw new Error("Supabase Auth no devolvio usuario");
+  }
+
+  return {
+    sub: user.id,
+    email: user.email,
+  };
+}
+
 let joseModulePromise: Promise<any> | null = null;
 function getJose() {
   if (!joseModulePromise) {
@@ -118,8 +157,15 @@ export async function requireSupabaseAuth(
 
     return next();
   } catch (err) {
-    console.error("Error verificando JWT Supabase:", err);
-    return res.status(401).json({ error: "No autenticado" });
+    try {
+      const fallbackUser = await validateTokenWithSupabaseAuthApi(token);
+      req.supabaseUser = fallbackUser;
+      return next();
+    } catch (fallbackErr) {
+      console.error("Error verificando JWT Supabase:", err);
+      console.error("Error verificando token contra Supabase Auth:", fallbackErr);
+      return res.status(401).json({ error: "No autenticado" });
+    }
   }
 }
 
