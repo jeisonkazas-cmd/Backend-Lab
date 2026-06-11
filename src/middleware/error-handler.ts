@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { AppError } from '../utils/errors';
 
 export const errorHandler = (err: any, req: Request, res: Response, next: NextFunction) => {
-  let statusCode = err.statusCode || 500;
+  let statusCode = err.statusCode || err.status || 500;
   let message = err.message || 'Error interno del servidor';
 
   if (process.env.NODE_ENV === 'development') {

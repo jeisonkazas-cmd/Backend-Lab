@@ -1,4 +1,4 @@
-import type { NextFunction, Request, Response } from "express";
+﻿import type { NextFunction, Request, Response } from "express";
 import { pool } from "../db";
 import jwt from "jsonwebtoken";
 
@@ -11,9 +11,9 @@ function getBearerToken(req: Request): string | null {
 }
 
 function getSupabaseUrl(): string {
-  const url = process.env.POSTGRES_SUPABASE_URL;
+  const url = process.env.SUPABASE_URL || process.env.POSTGRES_SUPABASE_URL;
   if (!url) {
-    throw new Error("POSTGRES_SUPABASE_URL no está definida");
+    throw new Error("SUPABASE_URL o POSTGRES_SUPABASE_URL no esta definida");
   }
   return url.replace(/\/$/, "");
 }
@@ -63,11 +63,11 @@ export async function requireSupabaseAuth(
     const decoded = jwt.decode(token, { complete: true }) as any;
     const alg = decoded?.header?.alg;
 
-    // Si el token está firmado con HS256, podemos validar con el JWT_SECRET.
+    // Si el token estÃ¡ firmado con HS256, podemos validar con el JWT_SECRET.
     if (alg === "HS256") {
       if (!secret) {
         return res.status(500).json({
-          error: "Configuración incompleta",
+          error: "ConfiguraciÃ³n incompleta",
           message:
             "Falta SUPABASE_JWT_SECRET o POSTGRES_SUPABASE_JWT_SECRET para validar tokens HS256",
         });
@@ -85,9 +85,9 @@ export async function requireSupabaseAuth(
         supabaseUrl = getSupabaseUrl();
       } catch {
         return res.status(500).json({
-          error: "Configuración incompleta",
+          error: "ConfiguraciÃ³n incompleta",
           message:
-            "POSTGRES_SUPABASE_URL no está definida (necesaria para validar tokens RS256 via JWKS)",
+            "POSTGRES_SUPABASE_URL no estÃ¡ definida (necesaria para validar tokens RS256 via JWKS)",
         });
       }
 
@@ -106,7 +106,7 @@ export async function requireSupabaseAuth(
 
     const sub = payload.sub;
     if (!sub || typeof sub !== "string") {
-      return res.status(401).json({ error: "Token inválido" });
+      return res.status(401).json({ error: "Token invÃ¡lido" });
     }
 
     const emailClaim = payload.email;
@@ -168,3 +168,4 @@ export function requireSupabaseRole(roles: Array<"Estudiante" | "Docente" | "Adm
     }
   };
 }
+

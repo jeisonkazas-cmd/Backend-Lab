@@ -1,6 +1,9 @@
 import { Router } from "express";
 import { pool } from "../db";
-import { requireSupabaseAuth } from "./supabase-auth";
+import { requireSupabaseAuth, requireSupabaseRole } from "./supabase-auth";
+
+export const requireAuth = requireSupabaseAuth;
+export const requireRole = requireSupabaseRole;
 
 const router = Router();
 

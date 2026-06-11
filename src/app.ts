@@ -10,6 +10,7 @@ import practicasRoutes from "./routes/practicas";
 import informesRoutes from "./routes/informes";
 import foroRoutes from "./routes/foro";
 import gruposRoutes from "./routes/grupos";
+import platformRoutes from "./routes/platform";
 import path from "path";
 import { pool } from "./db";
 import { errorHandler, notFoundHandler } from "./middleware/error-handler";
@@ -52,6 +53,7 @@ app.use("/api", practicasRoutes);
 app.use("/api", informesRoutes);
 app.use("/api/foro", foroRoutes);
 app.use("/api/grupos", gruposRoutes);
+app.use("/api/platform", platformRoutes);
 
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok" });
