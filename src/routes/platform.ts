@@ -241,14 +241,19 @@ router.get("/docente/grupos", ...requireRole(["Docente", "Administrador"]), asyn
          g.nombre,
          g.descripcion,
          g.estado,
-         COUNT(DISTINCT ge.usuario_id) AS estudiantes,
-         COUNT(DISTINCT p.practica_id) AS practicas_creadas
+         (
+           SELECT COUNT(*)::int
+           FROM grupos_estudiantes ge
+           WHERE ge.grupo_id = g.grupo_id
+         ) AS estudiantes,
+         (
+           SELECT COUNT(*)::int
+           FROM practicas p
+           WHERE p.grupo_id = g.grupo_id
+         ) AS practicas_creadas
        FROM grupos g
        JOIN grupos_docentes gd ON gd.grupo_id = g.grupo_id
-       LEFT JOIN grupos_estudiantes ge ON ge.grupo_id = g.grupo_id
-       LEFT JOIN practicas p ON p.grupo_id = g.grupo_id
        WHERE gd.usuario_id = $1
-       GROUP BY g.grupo_id
        ORDER BY g.nombre ASC`,
       [profile.usuario_id]
     );
@@ -331,13 +336,19 @@ router.get("/docente/grupos/:grupoId", ...requireRole(["Docente", "Administrador
          g.nombre,
          g.descripcion,
          g.estado,
-         COUNT(DISTINCT ge.usuario_id) AS estudiantes,
-         COUNT(DISTINCT p.practica_id) AS practicas_creadas
+         (
+           SELECT COUNT(*)::int
+           FROM grupos_estudiantes ge
+           WHERE ge.grupo_id = g.grupo_id
+         ) AS estudiantes,
+         (
+           SELECT COUNT(*)::int
+           FROM practicas p
+           WHERE p.grupo_id = g.grupo_id
+         ) AS practicas_creadas
        FROM grupos g
-       LEFT JOIN grupos_estudiantes ge ON ge.grupo_id = g.grupo_id
-       LEFT JOIN practicas p ON p.grupo_id = g.grupo_id
        WHERE g.grupo_id = $1
-       GROUP BY g.grupo_id`,
+       LIMIT 1`,
       [grupoId]
     );
 
@@ -356,14 +367,27 @@ router.get("/docente/grupos/:grupoId/practicas", ...requireRole(["Docente", "Adm
     const result = await pool.query(
       `SELECT
          p.*,
-         s.url_recurso,
-         s.configuracion_json,
-         COUNT(DISTINCT i.informe_id) AS informes_recibidos
+         (
+           SELECT s.url_recurso
+           FROM simulaciones s
+           WHERE s.practica_id = p.practica_id
+           ORDER BY s.simulacion_id ASC
+           LIMIT 1
+         ) AS url_recurso,
+         (
+           SELECT s.configuracion_json::text
+           FROM simulaciones s
+           WHERE s.practica_id = p.practica_id
+           ORDER BY s.simulacion_id ASC
+           LIMIT 1
+         ) AS configuracion_json,
+         (
+           SELECT COUNT(*)::int
+           FROM informes i
+           WHERE i.practica_id = p.practica_id
+         ) AS informes_recibidos
        FROM practicas p
-       LEFT JOIN simulaciones s ON s.practica_id = p.practica_id
-       LEFT JOIN informes i ON i.practica_id = p.practica_id
        WHERE p.grupo_id = $1
-       GROUP BY p.practica_id, s.url_recurso, s.configuracion_json
        ORDER BY p.fecha_publicacion DESC`,
       [grupoId]
     );
