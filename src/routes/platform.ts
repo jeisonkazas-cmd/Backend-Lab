@@ -260,6 +260,7 @@ router.get("/docente/grupos", ...requireRole(["Docente", "Administrador"]), asyn
 
     res.json(result.rows.map(mapGrupo));
   } catch (err) {
+    console.error("Error en GET /api/platform/docente/grupos:", err);
     next(err);
   }
 });
@@ -394,6 +395,7 @@ router.get("/docente/grupos/:grupoId/practicas", ...requireRole(["Docente", "Adm
 
     res.json(result.rows.map((row) => mapPractica(row)));
   } catch (err) {
+    console.error("Error en GET /api/platform/docente/grupos/:grupoId/practicas:", err);
     next(err);
   }
 });
@@ -507,6 +509,7 @@ router.get("/docente/practicas/:practicaId/informes", ...requireRole(["Docente",
       facultad: "Laboratorio de Fisica",
     })));
   } catch (err) {
+    console.error("Error en GET /api/platform/docente/practicas/:practicaId/informes:", err);
     next(err);
   }
 });
