@@ -28,7 +28,24 @@ function cleanEnvValue(value: string | undefined): string | null {
 
   // Vercel stores the value exactly as typed. If the connection string was
   // pasted with wrapping quotes, pg receives those quotes and cannot connect.
-  return trimmed.replace(/^['"]|['"]$/g, "");
+  const withoutQuotes = trimmed.replace(/^['"]|['"]$/g, "");
+
+  try {
+    const url = new URL(withoutQuotes);
+    if (url.protocol === "postgres:" || url.protocol === "postgresql:") {
+      // node-postgres lets sslmode in the connection string override the Pool
+      // ssl object. Supabase pooler certs can then fail with SELF_SIGNED_CERT_IN_CHAIN.
+      url.searchParams.delete("sslmode");
+      url.searchParams.delete("sslcert");
+      url.searchParams.delete("sslkey");
+      url.searchParams.delete("sslrootcert");
+      return url.toString();
+    }
+  } catch {
+    // If it is not a valid URL, return the cleaned raw value and let pg report it.
+  }
+
+  return withoutQuotes;
 }
 
 // POSTGRES_SUPABASE_URL is usually the HTTPS Supabase project URL, not a
