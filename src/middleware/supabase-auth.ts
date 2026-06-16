@@ -213,8 +213,11 @@ export function requireSupabaseRole(roles: Array<"Estudiante" | "Docente" | "Adm
       return next();
     } catch (err) {
       console.error("Error resolviendo rol Supabase:", err);
-      return res.status(500).json({ error: "Error interno del servidor" });
+      const dbError = err as { code?: string };
+      return res.status(500).json({
+        error: "No se pudo consultar el perfil/rol en la base de datos",
+        code: dbError.code || null,
+      });
     }
   };
 }
-

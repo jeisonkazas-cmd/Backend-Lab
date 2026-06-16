@@ -59,6 +59,21 @@ app.get("/api/health", (_req, res) => {
   res.json({ status: "ok" });
 });
 
+app.get("/api/health/db", async (_req, res) => {
+  try {
+    await pool.query("SELECT 1");
+    res.json({ status: "ok" });
+  } catch (err) {
+    console.error("DB health check failed:", err);
+    const dbError = err as { code?: string };
+    res.status(500).json({
+      status: "error",
+      error: "No se pudo conectar a la base de datos",
+      code: dbError.code || null,
+    });
+  }
+});
+
 app.use(notFoundHandler);
 app.use(errorHandler);
 

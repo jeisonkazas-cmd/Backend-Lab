@@ -22,13 +22,22 @@ function buildPostgresUrlFromParts(): string | null {
   return `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${host}:${port}/${database}`;
 }
 
+function cleanEnvValue(value: string | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+
+  // Vercel stores the value exactly as typed. If the connection string was
+  // pasted with wrapping quotes, pg receives those quotes and cannot connect.
+  return trimmed.replace(/^['"]|['"]$/g, "");
+}
+
 // POSTGRES_SUPABASE_URL is usually the HTTPS Supabase project URL, not a
 // Postgres connection string. Keep it out of the database pool config.
 const connectionString =
-  process.env.POSTGRES_URL ||
-  process.env.DATABASE_URL ||
-  process.env.POSTGRES_PRISMA_URL ||
-  process.env.POSTGRES_URL_NON_POOLING ||
+  cleanEnvValue(process.env.POSTGRES_URL) ||
+  cleanEnvValue(process.env.DATABASE_URL) ||
+  cleanEnvValue(process.env.POSTGRES_PRISMA_URL) ||
+  cleanEnvValue(process.env.POSTGRES_URL_NON_POOLING) ||
   buildPostgresUrlFromParts();
 
 if (!connectionString) {
