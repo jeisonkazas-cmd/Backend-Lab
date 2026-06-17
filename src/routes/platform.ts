@@ -136,7 +136,7 @@ function escapeHtml(value: string) {
 
 async function sendNotificationEmail(to: string, subject: string, message: string, urlAccion?: string | null) {
   const apiKey = process.env.RESEND_API_KEY;
-  const from = process.env.NOTIFICATIONS_EMAIL_FROM || process.env.EMAIL_FROM;
+  const from = process.env.NOTIFICATIONS_EMAIL_FROM || process.env.RESEND_FROM || process.env.EMAIL_FROM;
   if (!apiKey || !from || !to) return;
 
   const frontendUrl = getFrontendUrl();
@@ -414,6 +414,28 @@ router.patch("/notificaciones/leidas", ...requireRole(["Estudiante", "Docente", 
       [profile.usuario_id]
     );
     res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/notificaciones/test-email", ...requireRole(["Estudiante", "Docente", "Administrador"]), async (req, res, next) => {
+  try {
+    const profile = requireProfile(req);
+    if (!process.env.RESEND_API_KEY || !(process.env.NOTIFICATIONS_EMAIL_FROM || process.env.RESEND_FROM || process.env.EMAIL_FROM)) {
+      return res.status(400).json({
+        error: "Correo no configurado. Agrega RESEND_API_KEY y NOTIFICATIONS_EMAIL_FROM en Vercel.",
+      });
+    }
+
+    await sendNotificationEmail(
+      profile.correo,
+      "Prueba de notificaciones por correo",
+      "El envío de correos de la plataforma está configurado correctamente.",
+      "/"
+    );
+
+    res.json({ ok: true, mensaje: `Correo de prueba enviado a ${profile.correo}.` });
   } catch (err) {
     next(err);
   }
@@ -1140,6 +1162,15 @@ router.get("/practicas/:practicaId/foro", ...requireRole(["Estudiante", "Docente
       }
     }
 
+    const countReplies = (mensaje: any): number => {
+      mensaje.respuestas = mensaje.respuestasItems.reduce(
+        (total: number, respuesta: any) => total + 1 + countReplies(respuesta),
+        0
+      );
+      return mensaje.respuestas;
+    };
+
+    hilos.forEach(countReplies);
     res.json(hilos.reverse());
   } catch (err) {
     next(err);
