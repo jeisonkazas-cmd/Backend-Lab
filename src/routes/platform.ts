@@ -43,6 +43,26 @@ function safeFilename(name: string) {
   return name.replace(/[^\w.\-]+/g, "_");
 }
 
+async function ensureRecursosCatalogoTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS recursos_catalogo (
+      recurso_id SERIAL PRIMARY KEY,
+      titulo VARCHAR(255) NOT NULL,
+      tipo VARCHAR(30) NOT NULL DEFAULT 'guia',
+      laboratorio VARCHAR(80),
+      archivo_url TEXT NOT NULL,
+      archivo_nombre VARCHAR(255),
+      storage_path TEXT,
+      mime_type VARCHAR(120),
+      estado VARCHAR(20) NOT NULL DEFAULT 'activo',
+      creado_por INT REFERENCES usuarios(usuario_id) ON DELETE SET NULL,
+      fecha_creacion TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_recursos_catalogo_estado ON recursos_catalogo(estado);
+    CREATE INDEX IF NOT EXISTS idx_recursos_catalogo_tipo ON recursos_catalogo(tipo);
+  `);
+}
+
 function getStorageConfig() {
   const url = process.env.SUPABASE_URL || process.env.POSTGRES_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -824,6 +844,114 @@ router.get("/admin/practicas", ...requireRole(["Administrador"]), async (_req, r
       `SELECT practica_id, titulo FROM practicas ORDER BY titulo ASC`
     );
     res.json(result.rows.map((row) => ({ id: row.practica_id, titulo: row.titulo })));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/admin/recursos", ...requireRole(["Administrador"]), async (_req, res, next) => {
+  try {
+    await ensureRecursosCatalogoTable();
+    const result = await pool.query(
+      `SELECT *
+       FROM recursos_catalogo
+       ORDER BY fecha_creacion DESC, recurso_id DESC`
+    );
+
+    res.json(result.rows.map((row) => ({
+      id: String(row.recurso_id),
+      sourceId: row.recurso_id,
+      titulo: row.titulo,
+      tipo: row.tipo,
+      laboratorio: row.laboratorio || "",
+      url: row.archivo_url,
+      archivoNombre: row.archivo_nombre || "",
+      mimeType: row.mime_type || "",
+      fechaCreacion: row.fecha_creacion,
+      descargas: 0,
+      estado: row.estado || "activo",
+    })));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/docente/recursos", ...requireRole(["Docente", "Administrador"]), async (_req, res, next) => {
+  try {
+    await ensureRecursosCatalogoTable();
+    const result = await pool.query(
+      `SELECT recurso_id, titulo, tipo, laboratorio, archivo_url, archivo_nombre
+       FROM recursos_catalogo
+       WHERE estado = 'activo'
+       ORDER BY laboratorio ASC NULLS LAST, titulo ASC`
+    );
+
+    res.json(result.rows.map((row) => ({
+      id: String(row.recurso_id),
+      label: row.laboratorio ? `${row.laboratorio} - ${row.titulo}` : row.titulo,
+      tipo: row.tipo,
+      laboratorio: row.laboratorio || "",
+      url: row.archivo_url,
+      archivoNombre: row.archivo_nombre || "",
+    })));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/admin/recursos", ...requireRole(["Administrador"]), upload.single("file"), async (req, res, next) => {
+  try {
+    const profile = requireProfile(req);
+    const titulo = String(req.body.titulo || "").trim();
+    const tipo = String(req.body.tipo || "guia").trim().toLowerCase();
+    const laboratorio = String(req.body.laboratorio || "").trim();
+
+    if (!titulo) return res.status(400).json({ error: "El titulo es obligatorio." });
+    if (!["guia", "informe"].includes(tipo)) {
+      return res.status(400).json({ error: "El tipo debe ser guia o informe." });
+    }
+    if (!req.file) return res.status(400).json({ error: "Selecciona un archivo." });
+
+    const allowedTypes = new Set(["application/pdf", "text/html"]);
+    const isHtmlByName = req.file.originalname.toLowerCase().endsWith(".html");
+    if (!allowedTypes.has(req.file.mimetype) && !isHtmlByName) {
+      return res.status(400).json({ error: "Solo se permiten archivos PDF o HTML." });
+    }
+
+    await ensureRecursosCatalogoTable();
+    const path = `${tipo}s/${laboratorio || "general"}/${Date.now()}_${safeFilename(req.file.originalname)}`;
+    const url = await uploadToStorage("guias", path, req.file);
+    const created = await pool.query(
+      `INSERT INTO recursos_catalogo
+       (titulo, tipo, laboratorio, archivo_url, archivo_nombre, storage_path, mime_type, creado_por)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING recurso_id`,
+      [
+        titulo,
+        tipo,
+        laboratorio || null,
+        url,
+        req.file.originalname,
+        path,
+        req.file.mimetype || (isHtmlByName ? "text/html" : "application/octet-stream"),
+        profile.usuario_id,
+      ]
+    );
+
+    res.status(201).json({ id: String(created.rows[0].recurso_id), url });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.delete("/admin/recursos/:recursoId", ...requireRole(["Administrador"]), async (req, res, next) => {
+  try {
+    await ensureRecursosCatalogoTable();
+    await pool.query(
+      `UPDATE recursos_catalogo SET estado = 'inactivo' WHERE recurso_id = $1`,
+      [Number(req.params.recursoId)]
+    );
+    res.json({ ok: true });
   } catch (err) {
     next(err);
   }
