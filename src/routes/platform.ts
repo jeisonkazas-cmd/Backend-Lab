@@ -137,7 +137,13 @@ function escapeHtml(value: string) {
 async function sendNotificationEmail(to: string, subject: string, message: string, urlAccion?: string | null) {
   const apiKey = process.env.RESEND_API_KEY;
   const from = process.env.NOTIFICATIONS_EMAIL_FROM || process.env.RESEND_FROM || process.env.EMAIL_FROM;
-  if (!apiKey || !from || !to) return;
+  if (!apiKey || !from || !to) {
+    return {
+      sent: false,
+      skipped: true,
+      reason: "Correo no configurado o destinatario vacio.",
+    };
+  }
 
   const frontendUrl = getFrontendUrl();
   const actionUrl = urlAccion && urlAccion.startsWith("http")
@@ -172,9 +178,28 @@ async function sendNotificationEmail(to: string, subject: string, message: strin
     if (!response.ok) {
       const text = await response.text();
       console.warn("No se pudo enviar correo de notificacion:", text);
+      return {
+        sent: false,
+        skipped: false,
+        status: response.status,
+        error: text,
+      };
     }
+
+    const data = await response.json().catch(() => null);
+    return {
+      sent: true,
+      skipped: false,
+      status: response.status,
+      data,
+    };
   } catch (err) {
     console.warn("Error enviando correo de notificacion:", err);
+    return {
+      sent: false,
+      skipped: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
   }
 }
 
@@ -428,14 +453,22 @@ router.post("/notificaciones/test-email", ...requireRole(["Estudiante", "Docente
       });
     }
 
-    await sendNotificationEmail(
+    const result = await sendNotificationEmail(
       profile.correo,
       "Prueba de notificaciones por correo",
       "El envío de correos de la plataforma está configurado correctamente.",
       "/"
     );
 
-    res.json({ ok: true, mensaje: `Correo de prueba enviado a ${profile.correo}.` });
+    if (!result?.sent) {
+      return res.status(502).json({
+        ok: false,
+        mensaje: `No se pudo enviar el correo de prueba a ${profile.correo}.`,
+        detalle: result,
+      });
+    }
+
+    res.json({ ok: true, mensaje: `Correo de prueba enviado a ${profile.correo}.`, detalle: result });
   } catch (err) {
     next(err);
   }
