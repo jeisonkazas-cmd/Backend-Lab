@@ -917,8 +917,17 @@ router.post("/practicas/:practicaId/foro", ...requireRole(["Estudiante", "Docent
     const profile = requireProfile(req);
     const practicaId = Number(req.params.practicaId);
     const contenido = String(req.body.contenido || "").trim();
-    const mensajePadreId = req.body.mensajePadreId ? Number(req.body.mensajePadreId) : null;
+    const rawMensajePadreId = req.body.mensajePadreId
+      ?? req.body.mensaje_padre_id
+      ?? req.body.parentId
+      ?? req.body.respondeA;
+    const mensajePadreId = rawMensajePadreId !== undefined && rawMensajePadreId !== null && rawMensajePadreId !== ""
+      ? Number(rawMensajePadreId)
+      : null;
     if (!contenido) return res.status(400).json({ error: "El contenido es obligatorio." });
+    if (mensajePadreId !== null && (!Number.isInteger(mensajePadreId) || mensajePadreId <= 0)) {
+      return res.status(400).json({ error: "El mensaje a responder no es válido." });
+    }
 
     const grupoId = await getPracticaGrupo(practicaId);
     if (profile.rol === "Docente") await assertDocenteGrupo(profile.usuario_id, grupoId);
@@ -933,12 +942,19 @@ router.post("/practicas/:practicaId/foro", ...requireRole(["Estudiante", "Docent
       if (!parent.rows[0]) return res.status(400).json({ error: "El mensaje a responder no existe en este foro." });
     }
 
-    await pool.query(
-      `INSERT INTO mensajes_foro (foro_id, autor_id, mensaje_padre_id, contenido) VALUES ($1, $2, $3, $4)`,
+    const inserted = await pool.query(
+      `INSERT INTO mensajes_foro (foro_id, autor_id, mensaje_padre_id, contenido)
+       VALUES ($1, $2, $3, $4)
+       RETURNING mensaje_id, mensaje_padre_id`,
       [foro.foro_id, profile.usuario_id, mensajePadreId, contenido]
     );
 
-    res.status(201).json({ success: true, mensaje: mensajePadreId ? "Respuesta publicada" : "Post publicado" });
+    res.status(201).json({
+      success: true,
+      mensaje: mensajePadreId ? "Respuesta publicada" : "Post publicado",
+      id: String(inserted.rows[0].mensaje_id),
+      mensajePadreId: inserted.rows[0].mensaje_padre_id ? String(inserted.rows[0].mensaje_padre_id) : null,
+    });
   } catch (err) {
     next(err);
   }
