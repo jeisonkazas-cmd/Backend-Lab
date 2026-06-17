@@ -65,10 +65,16 @@ async function ensureRecursosCatalogoTable() {
 
 function getStorageConfig() {
   const url = process.env.SUPABASE_URL || process.env.POSTGRES_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const key =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.POSTGRES_SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_SECRET_KEY ||
+    process.env.POSTGRES_SUPABASE_SECRET_KEY;
 
   if (!url || !key) {
-    throw new Error("Falta SUPABASE_URL y/o SUPABASE_SERVICE_ROLE_KEY para Storage.");
+    throw new Error(
+      "Falta configurar Storage en el backend: agrega SUPABASE_SERVICE_ROLE_KEY o POSTGRES_SUPABASE_SERVICE_ROLE_KEY en Vercel."
+    );
   }
 
   return {
