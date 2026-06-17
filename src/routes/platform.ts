@@ -380,6 +380,74 @@ router.get("/docente/grupos/:grupoId", ...requireRole(["Docente", "Administrador
   }
 });
 
+router.post("/docente/grupos/:grupoId/estudiantes", ...requireRole(["Docente", "Administrador"]), async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    const profile = requireProfile(req);
+    const grupoId = Number(req.params.grupoId);
+    await assertDocenteGrupo(profile.usuario_id, grupoId);
+
+    const correos = String(req.body.estudiantes || req.body.correos || "")
+      .split(/[\n,;]+/)
+      .map((correo) => correo.trim().toLowerCase())
+      .filter(Boolean);
+
+    if (correos.length === 0) {
+      return res.status(400).json({ error: "Ingresa al menos un correo de estudiante." });
+    }
+
+    const uniqueEmails = [...new Set(correos)];
+    const usuarios = await client.query(
+      `SELECT u.usuario_id, LOWER(u.correo) AS correo
+       FROM usuarios u
+       JOIN usuarios_roles ur ON ur.usuario_id = u.usuario_id
+       JOIN roles r ON r.rol_id = ur.rol_id
+       WHERE LOWER(u.correo) = ANY($1::text[])
+         AND r.nombre = 'Estudiante'`,
+      [uniqueEmails]
+    );
+
+    const byEmail = new Map(usuarios.rows.map((usuario) => [usuario.correo, usuario.usuario_id]));
+    const estudiantesNoEncontrados = uniqueEmails.filter((correo) => !byEmail.has(correo));
+    let estudiantesAgregados = 0;
+    let estudiantesExistentes = 0;
+
+    await client.query("BEGIN");
+    for (const usuarioId of byEmail.values()) {
+      const inserted = await client.query(
+        `INSERT INTO grupos_estudiantes (grupo_id, usuario_id, estado)
+         SELECT $1, $2, 'activo'
+         WHERE NOT EXISTS (
+           SELECT 1 FROM grupos_estudiantes WHERE grupo_id = $1 AND usuario_id = $2
+         )`,
+        [grupoId, usuarioId]
+      );
+
+      if ((inserted.rowCount || 0) > 0) {
+        estudiantesAgregados += 1;
+      } else {
+        estudiantesExistentes += 1;
+        await client.query(
+          `UPDATE grupos_estudiantes SET estado = 'activo' WHERE grupo_id = $1 AND usuario_id = $2`,
+          [grupoId, usuarioId]
+        );
+      }
+    }
+    await client.query("COMMIT");
+
+    res.status(201).json({
+      estudiantesAgregados,
+      estudiantesExistentes,
+      estudiantesNoEncontrados,
+    });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    next(err);
+  } finally {
+    client.release();
+  }
+});
+
 router.get("/docente/grupos/:grupoId/practicas", ...requireRole(["Docente", "Administrador"]), async (req, res, next) => {
   try {
     const profile = requireProfile(req);
