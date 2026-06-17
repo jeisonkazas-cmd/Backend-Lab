@@ -120,6 +120,112 @@ function requireProfile(req: any) {
   };
 }
 
+function getFrontendUrl() {
+  const raw = process.env.FRONTEND_URL || process.env.APP_URL || process.env.CORS_ORIGIN || "";
+  return raw.split(",")[0].trim().replace(/\/$/, "");
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+async function sendNotificationEmail(to: string, subject: string, message: string, urlAccion?: string | null) {
+  const apiKey = process.env.RESEND_API_KEY;
+  const from = process.env.NOTIFICATIONS_EMAIL_FROM || process.env.EMAIL_FROM;
+  if (!apiKey || !from || !to) return;
+
+  const frontendUrl = getFrontendUrl();
+  const actionUrl = urlAccion && urlAccion.startsWith("http")
+    ? urlAccion
+    : urlAccion && frontendUrl
+      ? `${frontendUrl}${urlAccion.startsWith("/") ? "" : "/"}${urlAccion}`
+      : null;
+
+  const html = `
+    <div style="font-family:Arial,sans-serif;line-height:1.5;color:#0f172a">
+      <h2>${escapeHtml(subject)}</h2>
+      <p>${escapeHtml(message)}</p>
+      ${actionUrl ? `<p><a href="${escapeHtml(actionUrl)}" style="display:inline-block;background:#1152d4;color:#fff;padding:10px 14px;border-radius:8px;text-decoration:none">Ver en la plataforma</a></p>` : ""}
+    </div>
+  `;
+
+  try {
+    const response = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${apiKey}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        from,
+        to,
+        subject,
+        html,
+      }),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      console.warn("No se pudo enviar correo de notificacion:", text);
+    }
+  } catch (err) {
+    console.warn("Error enviando correo de notificacion:", err);
+  }
+}
+
+async function notifyUsers(
+  db: any,
+  input: {
+    userIds: number[];
+    tipo: string;
+    titulo: string;
+    mensaje: string;
+    urlAccion?: string | null;
+    origenTipo?: string | null;
+    origenId?: number | null;
+    sendEmail?: boolean;
+  }
+) {
+  const userIds = [...new Set(input.userIds.filter((id) => Number.isInteger(id) && id > 0))];
+  if (userIds.length === 0) return;
+
+  await db.query(
+    `INSERT INTO notificaciones (usuario_id, tipo, titulo, mensaje, url_accion, origen_tipo, origen_id)
+     SELECT user_id, $2, $3, $4, $5, $6, $7
+     FROM unnest($1::int[]) AS user_id`,
+    [
+      userIds,
+      input.tipo,
+      input.titulo,
+      input.mensaje,
+      input.urlAccion || null,
+      input.origenTipo || null,
+      input.origenId || null,
+    ]
+  );
+
+  if (input.sendEmail === false) return;
+
+  const users = await db.query(
+    `SELECT usuario_id, correo FROM usuarios WHERE usuario_id = ANY($1::int[])`,
+    [userIds]
+  );
+
+  await Promise.all(
+    users.rows.map((user: any) => sendNotificationEmail(
+      user.correo,
+      input.titulo,
+      input.mensaje,
+      input.urlAccion
+    ))
+  );
+}
+
 async function assertDocenteGrupo(docenteId: number, grupoId: number) {
   const { rowCount } = await pool.query(
     `SELECT 1 FROM grupos_docentes WHERE usuario_id = $1 AND grupo_id = $2 LIMIT 1`,
@@ -258,6 +364,61 @@ router.get("/profile", ...requireRole(["Estudiante", "Docente", "Administrador"]
   });
 });
 
+router.get("/notificaciones", ...requireRole(["Estudiante", "Docente", "Administrador"]), async (req, res, next) => {
+  try {
+    const profile = requireProfile(req);
+    const result = await pool.query(
+      `SELECT notificacion_id, tipo, titulo, mensaje, leida, fecha_creacion, url_accion, origen_tipo, origen_id
+       FROM notificaciones
+       WHERE usuario_id = $1
+       ORDER BY fecha_creacion DESC
+       LIMIT 30`,
+      [profile.usuario_id]
+    );
+
+    res.json(result.rows.map((row) => ({
+      id: String(row.notificacion_id),
+      tipo: row.tipo,
+      titulo: row.titulo,
+      mensaje: row.mensaje,
+      leida: Boolean(row.leida),
+      fechaCreacion: formatDateTime(row.fecha_creacion),
+      urlAccion: row.url_accion,
+      origenTipo: row.origen_tipo,
+      origenId: row.origen_id ? String(row.origen_id) : null,
+    })));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.patch("/notificaciones/:notificacionId/leida", ...requireRole(["Estudiante", "Docente", "Administrador"]), async (req, res, next) => {
+  try {
+    const profile = requireProfile(req);
+    const notificacionId = Number(req.params.notificacionId);
+    await pool.query(
+      `UPDATE notificaciones SET leida = true WHERE notificacion_id = $1 AND usuario_id = $2`,
+      [notificacionId, profile.usuario_id]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.patch("/notificaciones/leidas", ...requireRole(["Estudiante", "Docente", "Administrador"]), async (req, res, next) => {
+  try {
+    const profile = requireProfile(req);
+    await pool.query(
+      `UPDATE notificaciones SET leida = true WHERE usuario_id = $1 AND leida = false`,
+      [profile.usuario_id]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.get("/docente/grupos", ...requireRole(["Docente", "Administrador"]), async (req, res, next) => {
   try {
     const profile = requireProfile(req);
@@ -331,8 +492,9 @@ router.post("/docente/grupos", ...requireRole(["Docente", "Administrador"]), asy
       );
       const byEmail = new Map(usuarios.rows.map((usuario) => [usuario.correo, usuario.usuario_id]));
       result.estudiantesNoEncontrados = [...new Set(correos)].filter((correo) => !byEmail.has(correo));
+      const estudianteIds = [...byEmail.values()] as number[];
 
-      for (const usuarioId of byEmail.values()) {
+      for (const usuarioId of estudianteIds) {
         await client.query(
           `INSERT INTO grupos_estudiantes (grupo_id, usuario_id, estado)
            VALUES ($1, $2, 'activo')`,
@@ -340,6 +502,16 @@ router.post("/docente/grupos", ...requireRole(["Docente", "Administrador"]), asy
         );
         result.estudiantesAgregados += 1;
       }
+
+      await notifyUsers(client, {
+        userIds: estudianteIds,
+        tipo: "grupo_asignado",
+        titulo: "Te asignaron a un grupo",
+        mensaje: `Fuiste registrado en el grupo ${nombre}.`,
+        urlAccion: `/estudiante/grupos/${grupoId}/practicas`,
+        origenTipo: "grupo",
+        origenId: grupoId,
+      });
     }
 
     await client.query("COMMIT");
@@ -417,6 +589,7 @@ router.post("/docente/grupos/:grupoId/estudiantes", ...requireRole(["Docente", "
     const estudiantesNoEncontrados = uniqueEmails.filter((correo) => !byEmail.has(correo));
     let estudiantesAgregados = 0;
     let estudiantesExistentes = 0;
+    const estudiantesNotificar: number[] = [];
 
     await client.query("BEGIN");
     for (const usuarioId of byEmail.values()) {
@@ -431,14 +604,27 @@ router.post("/docente/grupos/:grupoId/estudiantes", ...requireRole(["Docente", "
 
       if ((inserted.rowCount || 0) > 0) {
         estudiantesAgregados += 1;
+        estudiantesNotificar.push(Number(usuarioId));
       } else {
         estudiantesExistentes += 1;
         await client.query(
           `UPDATE grupos_estudiantes SET estado = 'activo' WHERE grupo_id = $1 AND usuario_id = $2`,
           [grupoId, usuarioId]
         );
+        estudiantesNotificar.push(Number(usuarioId));
       }
     }
+
+    const grupoInfo = await client.query(`SELECT nombre FROM grupos WHERE grupo_id = $1`, [grupoId]);
+    await notifyUsers(client, {
+      userIds: estudiantesNotificar,
+      tipo: "grupo_asignado",
+      titulo: "Te asignaron a un grupo",
+      mensaje: `Fuiste registrado en el grupo ${grupoInfo.rows[0]?.nombre || `Grupo ${grupoId}`}.`,
+      urlAccion: `/estudiante/grupos/${grupoId}/practicas`,
+      origenTipo: "grupo",
+      origenId: grupoId,
+    });
     await client.query("COMMIT");
 
     res.status(201).json({
@@ -560,6 +746,20 @@ router.post("/docente/grupos/:grupoId/practicas", ...requireRole(["Docente", "Ad
       );
     }
 
+    const estudiantes = await client.query(
+      `SELECT usuario_id FROM grupos_estudiantes WHERE grupo_id = $1 AND COALESCE(estado, 'activo') = 'activo'`,
+      [grupoId]
+    );
+    await notifyUsers(client, {
+      userIds: estudiantes.rows.map((row) => Number(row.usuario_id)),
+      tipo: "practica_creada",
+      titulo: "Nueva práctica disponible",
+      mensaje: `El docente publicó la práctica ${titulo}.`,
+      urlAccion: `/estudiante/practicas/${practicaId}`,
+      origenTipo: "practica",
+      origenId: practicaId,
+    });
+
     await client.query("COMMIT");
     res.status(201).json({ practica_id: practicaId });
   } catch (err) {
@@ -669,7 +869,13 @@ router.put("/docente/informes/:informeId/calificacion", ...requireRole(["Docente
       return res.status(400).json({ error: "La nota debe estar entre 0 y 5." });
     }
 
-    const informe = await client.query(`SELECT practica_id FROM informes WHERE informe_id = $1`, [informeId]);
+    const informe = await client.query(
+      `SELECT i.practica_id, i.estudiante_id, p.titulo
+       FROM informes i
+       JOIN practicas p ON p.practica_id = i.practica_id
+       WHERE i.informe_id = $1`,
+      [informeId]
+    );
     if (!informe.rows[0]) return res.status(404).json({ error: "Informe no encontrado." });
 
     const grupoId = await getPracticaGrupo(Number(informe.rows[0].practica_id));
@@ -700,6 +906,15 @@ router.put("/docente/informes/:informeId/calificacion", ...requireRole(["Docente
       `UPDATE informes SET estado = 'calificado', fecha_actualizacion = NOW() WHERE informe_id = $1`,
       [informeId]
     );
+    await notifyUsers(client, {
+      userIds: [Number(informe.rows[0].estudiante_id)],
+      tipo: "informe_calificado",
+      titulo: "Tu informe fue calificado",
+      mensaje: `El docente calificó tu informe de ${informe.rows[0].titulo || "la práctica"}. Nota: ${nota}.`,
+      urlAccion: `/estudiante/practicas/${informe.rows[0].practica_id}`,
+      origenTipo: "informe",
+      origenId: informeId,
+    });
     await client.query("COMMIT");
     res.json({ ok: true });
   } catch (err) {
@@ -828,20 +1043,39 @@ router.post("/estudiante/practicas/:practicaId/informes", ...requireRole(["Estud
       [practicaId, profile.usuario_id]
     );
 
+    let informeId: number;
     if (existing.rows[0]) {
-      await client.query(
+      const updated = await client.query(
         `UPDATE informes
          SET archivo_url = $2, archivo_nombre = $3, estado = 'entregado', fecha_actualizacion = NOW()
-         WHERE informe_id = $1`,
+         WHERE informe_id = $1
+         RETURNING informe_id`,
         [existing.rows[0].informe_id, archivoUrl, req.file.originalname]
       );
+      informeId = Number(updated.rows[0].informe_id);
     } else {
-      await client.query(
+      const inserted = await client.query(
         `INSERT INTO informes (practica_id, estudiante_id, archivo_url, archivo_nombre, estado)
-         VALUES ($1, $2, $3, $4, 'entregado')`,
+         VALUES ($1, $2, $3, $4, 'entregado')
+         RETURNING informe_id`,
         [practicaId, profile.usuario_id, archivoUrl, req.file.originalname]
       );
+      informeId = Number(inserted.rows[0].informe_id);
     }
+
+    const [practicaInfo, docentes] = await Promise.all([
+      client.query(`SELECT titulo FROM practicas WHERE practica_id = $1`, [practicaId]),
+      client.query(`SELECT usuario_id FROM grupos_docentes WHERE grupo_id = $1`, [grupoId]),
+    ]);
+    await notifyUsers(client, {
+      userIds: docentes.rows.map((row) => Number(row.usuario_id)),
+      tipo: "informe_subido",
+      titulo: "Informe entregado",
+      mensaje: `${profile.nombre_completo || "Un estudiante"} subió el informe de ${practicaInfo.rows[0]?.titulo || "la práctica"}.`,
+      urlAccion: `/docente/grupo/${grupoId}/practica/${practicaId}/informe/${informeId}`,
+      origenTipo: "informe",
+      origenId: informeId,
+    });
 
     await client.query("COMMIT");
     res.status(201).json({ success: true, mensaje: "Informe subido correctamente" });
@@ -948,6 +1182,43 @@ router.post("/practicas/:practicaId/foro", ...requireRole(["Estudiante", "Docent
        RETURNING mensaje_id, mensaje_padre_id`,
       [foro.foro_id, profile.usuario_id, mensajePadreId, contenido]
     );
+
+    const [practicaInfo, estudiantes, docentes] = await Promise.all([
+      pool.query(`SELECT titulo FROM practicas WHERE practica_id = $1`, [practicaId]),
+      pool.query(
+        `SELECT usuario_id FROM grupos_estudiantes
+         WHERE grupo_id = $1 AND usuario_id <> $2 AND COALESCE(estado, 'activo') = 'activo'`,
+        [grupoId, profile.usuario_id]
+      ),
+      pool.query(
+        `SELECT usuario_id FROM grupos_docentes WHERE grupo_id = $1 AND usuario_id <> $2`,
+        [grupoId, profile.usuario_id]
+      ),
+    ]);
+    const foroTitulo = practicaInfo.rows[0]?.titulo || "la práctica";
+    const notificationTitle = mensajePadreId ? "Nueva respuesta en el foro" : "Nueva publicación en el foro";
+    const notificationMessage = `${profile.nombre_completo || "Un usuario"} ${mensajePadreId ? "respondió" : "publicó"} en el foro de ${foroTitulo}.`;
+
+    await Promise.all([
+      notifyUsers(pool, {
+        userIds: estudiantes.rows.map((row) => Number(row.usuario_id)),
+        tipo: "foro",
+        titulo: notificationTitle,
+        mensaje: notificationMessage,
+        urlAccion: `/estudiante/practicas/${practicaId}/foro/${grupoId}`,
+        origenTipo: "foro",
+        origenId: Number(inserted.rows[0].mensaje_id),
+      }),
+      notifyUsers(pool, {
+        userIds: docentes.rows.map((row) => Number(row.usuario_id)),
+        tipo: "foro",
+        titulo: notificationTitle,
+        mensaje: notificationMessage,
+        urlAccion: `/docente/grupo/${grupoId}/practica/${practicaId}/foro`,
+        origenTipo: "foro",
+        origenId: Number(inserted.rows[0].mensaje_id),
+      }),
+    ]);
 
     res.status(201).json({
       success: true,
