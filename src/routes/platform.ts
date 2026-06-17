@@ -492,8 +492,13 @@ router.post("/docente/guias", ...requireRole(["Docente", "Administrador"]), uplo
   try {
     const profile = requireProfile(req);
     if (!req.file) return res.status(400).json({ error: "No se recibio archivo." });
-    if (req.file.mimetype !== "application/pdf") {
-      return res.status(400).json({ error: "Solo se permiten PDF." });
+    const allowedInformeTypes = new Set([
+      "application/pdf",
+      "application/msword",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ]);
+    if (!allowedInformeTypes.has(req.file.mimetype)) {
+      return res.status(400).json({ error: "Solo se permiten archivos PDF o Word." });
     }
 
     const path = `${profile.usuario_id}/guias/${Date.now()}_${safeFilename(req.file.originalname)}`;
@@ -988,7 +993,7 @@ router.post("/admin/recursos", ...requireRole(["Administrador"]), upload.single(
 
     await ensureRecursosCatalogoTable();
     const path = `${tipo}s/${laboratorio || "general"}/${Date.now()}_${safeFilename(req.file.originalname)}`;
-    const url = await uploadToStorage("guias", path, req.file);
+    const url = await uploadToStorage("recursos_catalogo", path, req.file);
     const created = await pool.query(
       `INSERT INTO recursos_catalogo
        (titulo, tipo, laboratorio, archivo_url, archivo_nombre, storage_path, mime_type, creado_por)
