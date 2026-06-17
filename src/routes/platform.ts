@@ -429,7 +429,7 @@ router.post("/docente/guias", ...requireRole(["Docente", "Administrador"]), uplo
     }
 
     const path = `${profile.usuario_id}/guias/${Date.now()}_${safeFilename(req.file.originalname)}`;
-    const url = await uploadToStorage("guias", path, req.file);
+    const url = await uploadToStorage("recursos_catalogo", path, req.file);
     res.status(201).json({ url, nombre: req.file.originalname });
   } catch (err) {
     next(err);
