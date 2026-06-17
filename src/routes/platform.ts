@@ -869,18 +869,18 @@ router.get("/practicas/:practicaId/foro", ...requireRole(["Estudiante", "Docente
        LEFT JOIN usuarios_roles ur ON ur.usuario_id = u.usuario_id
        LEFT JOIN roles r ON r.rol_id = ur.rol_id
        WHERE m.foro_id = $1
-       ORDER BY m.fecha_creacion DESC`,
+       ORDER BY m.fecha_creacion ASC`,
       [foro.foro_id]
     );
 
-    res.json(result.rows.map((row) => ({
+    const mapMensaje = (row: any) => ({
       id: String(row.mensaje_id),
       autor: row.nombre_completo || "Usuario",
       autorNombre: row.nombre_completo || "Usuario",
       autorAvatar: null,
       rol: row.rol === "Docente" ? "profesor" : "estudiante",
       autorRol: row.rol === "Docente" ? "docente" : "estudiante",
-      titulo: String(row.contenido || "").split("\n")[0].slice(0, 100) || "Publicacion",
+      titulo: String(row.contenido || "").split("\n")[0].slice(0, 100) || "Publicación",
       contenido: row.contenido,
       preview: row.contenido,
       timestamp: formatDateTime(row.fecha_creacion),
@@ -888,7 +888,25 @@ router.get("/practicas/:practicaId/foro", ...requireRole(["Estudiante", "Docente
       visitas: 0,
       respuestas: 0,
       mensajePadreId: row.mensaje_padre_id ? String(row.mensaje_padre_id) : null,
-    })));
+      respuestasItems: [] as any[],
+    });
+
+    const mensajes = result.rows.map(mapMensaje);
+    const mensajesPorId = new Map(mensajes.map((mensaje) => [mensaje.id, mensaje]));
+    const hilos: any[] = [];
+
+    for (const mensaje of mensajes) {
+      if (mensaje.mensajePadreId && mensajesPorId.has(mensaje.mensajePadreId)) {
+        const padre = mensajesPorId.get(mensaje.mensajePadreId);
+        if (!padre) continue;
+        padre.respuestasItems.push(mensaje);
+        padre.respuestas = padre.respuestasItems.length;
+      } else {
+        hilos.push(mensaje);
+      }
+    }
+
+    res.json(hilos.reverse());
   } catch (err) {
     next(err);
   }
@@ -899,6 +917,7 @@ router.post("/practicas/:practicaId/foro", ...requireRole(["Estudiante", "Docent
     const profile = requireProfile(req);
     const practicaId = Number(req.params.practicaId);
     const contenido = String(req.body.contenido || "").trim();
+    const mensajePadreId = req.body.mensajePadreId ? Number(req.body.mensajePadreId) : null;
     if (!contenido) return res.status(400).json({ error: "El contenido es obligatorio." });
 
     const grupoId = await getPracticaGrupo(practicaId);
@@ -906,12 +925,20 @@ router.post("/practicas/:practicaId/foro", ...requireRole(["Estudiante", "Docent
     if (profile.rol === "Estudiante") await assertEstudianteGrupo(profile.usuario_id, grupoId);
 
     const foro = await getOrCreateForo(practicaId);
+    if (mensajePadreId) {
+      const parent = await pool.query(
+        `SELECT mensaje_id FROM mensajes_foro WHERE mensaje_id = $1 AND foro_id = $2`,
+        [mensajePadreId, foro.foro_id]
+      );
+      if (!parent.rows[0]) return res.status(400).json({ error: "El mensaje a responder no existe en este foro." });
+    }
+
     await pool.query(
-      `INSERT INTO mensajes_foro (foro_id, autor_id, contenido) VALUES ($1, $2, $3)`,
-      [foro.foro_id, profile.usuario_id, contenido]
+      `INSERT INTO mensajes_foro (foro_id, autor_id, mensaje_padre_id, contenido) VALUES ($1, $2, $3, $4)`,
+      [foro.foro_id, profile.usuario_id, mensajePadreId, contenido]
     );
 
-    res.status(201).json({ success: true, mensaje: "Post publicado" });
+    res.status(201).json({ success: true, mensaje: mensajePadreId ? "Respuesta publicada" : "Post publicado" });
   } catch (err) {
     next(err);
   }
