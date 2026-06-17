@@ -474,6 +474,21 @@ router.post("/notificaciones/test-email", ...requireRole(["Estudiante", "Docente
   }
 });
 
+router.get("/notificaciones/email-status", ...requireRole(["Estudiante", "Docente", "Administrador"]), async (req, res, next) => {
+  try {
+    const profile = requireProfile(req);
+    res.json({
+      configured: Boolean(process.env.RESEND_API_KEY && (process.env.NOTIFICATIONS_EMAIL_FROM || process.env.RESEND_FROM || process.env.EMAIL_FROM)),
+      hasApiKey: Boolean(process.env.RESEND_API_KEY),
+      from: process.env.NOTIFICATIONS_EMAIL_FROM || process.env.RESEND_FROM || process.env.EMAIL_FROM || null,
+      frontendUrl: getFrontendUrl() || null,
+      testRecipient: profile.correo || null,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.get("/docente/grupos", ...requireRole(["Docente", "Administrador"]), async (req, res, next) => {
   try {
     const profile = requireProfile(req);
