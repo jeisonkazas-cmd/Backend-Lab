@@ -63,6 +63,36 @@ async function ensureRecursosCatalogoTable() {
   `);
 }
 
+async function ensureAcademicToolsTables() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS rubricas (
+      rubrica_id SERIAL PRIMARY KEY,
+      docente_id INT NOT NULL REFERENCES usuarios(usuario_id) ON DELETE CASCADE,
+      nombre VARCHAR(255) NOT NULL,
+      descripcion TEXT,
+      estado VARCHAR(20) NOT NULL DEFAULT 'activa',
+      fecha_creacion TIMESTAMP DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS rubrica_criterios (
+      criterio_id SERIAL PRIMARY KEY,
+      rubrica_id INT NOT NULL REFERENCES rubricas(rubrica_id) ON DELETE CASCADE,
+      nombre VARCHAR(255) NOT NULL,
+      peso DECIMAL(5,2) NOT NULL CHECK (peso > 0 AND peso <= 100),
+      puntaje_maximo DECIMAL(5,2) NOT NULL DEFAULT 5 CHECK (puntaje_maximo > 0)
+    );
+    CREATE TABLE IF NOT EXISTS asistencia_practica (
+      asistencia_id SERIAL PRIMARY KEY,
+      practica_id INT NOT NULL REFERENCES practicas(practica_id) ON DELETE CASCADE,
+      estudiante_id INT NOT NULL REFERENCES usuarios(usuario_id) ON DELETE CASCADE,
+      docente_id INT NOT NULL REFERENCES usuarios(usuario_id) ON DELETE CASCADE,
+      estado VARCHAR(20) NOT NULL CHECK (estado IN ('presente', 'ausente', 'tarde', 'justificada')),
+      observacion TEXT,
+      fecha_registro TIMESTAMP DEFAULT NOW(),
+      UNIQUE (practica_id, estudiante_id)
+    );
+  `);
+}
+
 function getStorageConfig() {
   const url = process.env.SUPABASE_URL || process.env.POSTGRES_SUPABASE_URL;
   const key =
@@ -345,6 +375,8 @@ function mapPractica(row: any, informe?: any, retro?: any) {
     calificacion: retro?.calificacion ?? null,
     puntaje: retro?.calificacion ?? undefined,
     retroalimentacion: retro?.comentario || "",
+    asistencia: row.asistencia_estado || null,
+    observacionAsistencia: row.asistencia_observacion || "",
     tipo: row.url_recurso ? "virtual" : "presencial",
     informesRecibidos: Number(row.informes_recibidos || 0),
     estudiantesAsignados: [],
@@ -1059,17 +1091,20 @@ router.get("/estudiante/grupos/:grupoId/practicas", ...requireRole(["Estudiante"
 
 router.get("/estudiante/practicas/:practicaId", ...requireRole(["Estudiante", "Administrador"]), async (req, res, next) => {
   try {
+    await ensureAcademicToolsTables();
     const profile = requireProfile(req);
     const practicaId = Number(req.params.practicaId);
     const grupoId = await getPracticaGrupo(practicaId);
     await assertEstudianteGrupo(profile.usuario_id, grupoId);
     const result = await pool.query(
       `SELECT p.*, s.url_recurso, s.configuracion_json, i.informe_id, i.archivo_url, i.archivo_nombre, i.estado AS informe_estado,
-              r.calificacion, r.comentario
+              r.calificacion, r.comentario,
+              a.estado AS asistencia_estado, a.observacion AS asistencia_observacion
        FROM practicas p
        LEFT JOIN simulaciones s ON s.practica_id = p.practica_id
        LEFT JOIN informes i ON i.practica_id = p.practica_id AND i.estudiante_id = $2
        LEFT JOIN retroalimentaciones r ON r.informe_id = i.informe_id
+       LEFT JOIN asistencia_practica a ON a.practica_id = p.practica_id AND a.estudiante_id = $2
        WHERE p.practica_id = $1
        LIMIT 1`,
       [practicaId, profile.usuario_id]
@@ -1566,6 +1601,183 @@ router.delete("/admin/contenido/:tipo/:sourceId", ...requireRole(["Administrador
     res.json({ ok: true });
   } catch (err) {
     next(err);
+  }
+});
+
+router.get("/docente/rubricas", ...requireRole(["Docente", "Administrador"]), async (req, res, next) => {
+  try {
+    await ensureAcademicToolsTables();
+    const profile = requireProfile(req);
+    const result = await pool.query(
+      `SELECT r.rubrica_id, r.nombre, r.descripcion, r.estado, r.fecha_creacion,
+              COALESCE(
+                json_agg(
+                  json_build_object(
+                    'id', rc.criterio_id,
+                    'nombre', rc.nombre,
+                    'peso', rc.peso,
+                    'puntajeMaximo', rc.puntaje_maximo
+                  ) ORDER BY rc.criterio_id
+                ) FILTER (WHERE rc.criterio_id IS NOT NULL),
+                '[]'::json
+              ) AS criterios
+       FROM rubricas r
+       LEFT JOIN rubrica_criterios rc ON rc.rubrica_id = r.rubrica_id
+       WHERE r.docente_id = $1
+       GROUP BY r.rubrica_id
+       ORDER BY r.fecha_creacion DESC`,
+      [profile.usuario_id]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/docente/rubricas", ...requireRole(["Docente", "Administrador"]), async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    await ensureAcademicToolsTables();
+    const profile = requireProfile(req);
+    const nombre = String(req.body.nombre || "").trim();
+    const descripcion = String(req.body.descripcion || "").trim();
+    const criterios = Array.isArray(req.body.criterios) ? req.body.criterios : [];
+    if (!nombre) return res.status(400).json({ error: "El nombre de la rubrica es obligatorio." });
+    if (criterios.length === 0) return res.status(400).json({ error: "Agrega al menos un criterio." });
+
+    const normalized = criterios.map((criterio: any) => ({
+      nombre: String(criterio.nombre || "").trim(),
+      peso: Number(criterio.peso),
+      puntajeMaximo: Number(criterio.puntajeMaximo || 5),
+    }));
+    if (normalized.some((criterio: any) => !criterio.nombre || !Number.isFinite(criterio.peso) || criterio.peso <= 0)) {
+      return res.status(400).json({ error: "Cada criterio debe tener nombre y un peso mayor que cero." });
+    }
+    const totalPeso = normalized.reduce((sum: number, criterio: any) => sum + criterio.peso, 0);
+    if (Math.abs(totalPeso - 100) > 0.01) {
+      return res.status(400).json({ error: "La suma de los pesos debe ser 100%." });
+    }
+
+    await client.query("BEGIN");
+    const rubric = await client.query(
+      `INSERT INTO rubricas (docente_id, nombre, descripcion)
+       VALUES ($1, $2, $3)
+       RETURNING rubrica_id`,
+      [profile.usuario_id, nombre, descripcion || null]
+    );
+    const rubricaId = rubric.rows[0].rubrica_id;
+    for (const criterio of normalized) {
+      await client.query(
+        `INSERT INTO rubrica_criterios (rubrica_id, nombre, peso, puntaje_maximo)
+         VALUES ($1, $2, $3, $4)`,
+        [rubricaId, criterio.nombre, criterio.peso, criterio.puntajeMaximo]
+      );
+    }
+    await client.query("COMMIT");
+    res.status(201).json({ rubricaId });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    next(err);
+  } finally {
+    client.release();
+  }
+});
+
+router.get("/docente/grupos/:grupoId/estudiantes", ...requireRole(["Docente", "Administrador"]), async (req, res, next) => {
+  try {
+    const profile = requireProfile(req);
+    const grupoId = Number(req.params.grupoId);
+    await assertDocenteGrupo(profile.usuario_id, grupoId);
+    const result = await pool.query(
+      `SELECT u.usuario_id, u.nombre_completo, u.correo
+       FROM grupos_estudiantes ge
+       JOIN usuarios u ON u.usuario_id = ge.usuario_id
+       WHERE ge.grupo_id = $1 AND COALESCE(ge.estado, 'activo') = 'activo'
+       ORDER BY u.nombre_completo ASC`,
+      [grupoId]
+    );
+    res.json(result.rows.map((row) => ({
+      id: String(row.usuario_id),
+      nombre: row.nombre_completo,
+      correo: row.correo,
+    })));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/docente/practicas/:practicaId/asistencia", ...requireRole(["Docente", "Administrador"]), async (req, res, next) => {
+  try {
+    await ensureAcademicToolsTables();
+    const profile = requireProfile(req);
+    const practicaId = Number(req.params.practicaId);
+    const grupoId = await getPracticaGrupo(practicaId);
+    await assertDocenteGrupo(profile.usuario_id, grupoId);
+    const result = await pool.query(
+      `SELECT estudiante_id, estado, observacion, fecha_registro
+       FROM asistencia_practica
+       WHERE practica_id = $1`,
+      [practicaId]
+    );
+    res.json(result.rows.map((row) => ({
+      estudianteId: String(row.estudiante_id),
+      estado: row.estado,
+      observacion: row.observacion || "",
+      fechaRegistro: row.fecha_registro,
+    })));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.put("/docente/practicas/:practicaId/asistencia", ...requireRole(["Docente", "Administrador"]), async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    await ensureAcademicToolsTables();
+    const profile = requireProfile(req);
+    const practicaId = Number(req.params.practicaId);
+    const grupoId = await getPracticaGrupo(practicaId);
+    await assertDocenteGrupo(profile.usuario_id, grupoId);
+    const registros = Array.isArray(req.body.registros) ? req.body.registros : [];
+    const allowed = new Set(["presente", "ausente", "tarde", "justificada"]);
+    if (registros.length === 0) return res.status(400).json({ error: "No hay registros de asistencia." });
+
+    await client.query("BEGIN");
+    for (const registro of registros) {
+      const estudianteId = Number(registro.estudianteId);
+      const estado = String(registro.estado || "");
+      if (!Number.isInteger(estudianteId) || !allowed.has(estado)) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "Registro de asistencia invalido." });
+      }
+      const membership = await client.query(
+        `SELECT 1 FROM grupos_estudiantes
+         WHERE grupo_id = $1 AND usuario_id = $2 AND COALESCE(estado, 'activo') = 'activo'`,
+        [grupoId, estudianteId]
+      );
+      if (!membership.rows[0]) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "El estudiante no pertenece al grupo." });
+      }
+      await client.query(
+        `INSERT INTO asistencia_practica
+           (practica_id, estudiante_id, docente_id, estado, observacion, fecha_registro)
+         VALUES ($1, $2, $3, $4, $5, NOW())
+         ON CONFLICT (practica_id, estudiante_id)
+         DO UPDATE SET docente_id = EXCLUDED.docente_id,
+                       estado = EXCLUDED.estado,
+                       observacion = EXCLUDED.observacion,
+                       fecha_registro = NOW()`,
+        [practicaId, estudianteId, profile.usuario_id, estado, String(registro.observacion || "").trim() || null]
+      );
+    }
+    await client.query("COMMIT");
+    res.json({ ok: true, actualizados: registros.length });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    next(err);
+  } finally {
+    client.release();
   }
 });
 

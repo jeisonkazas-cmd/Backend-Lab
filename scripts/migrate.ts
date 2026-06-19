@@ -173,6 +173,43 @@ const migrations = [
     );
     CREATE INDEX IF NOT EXISTS idx_notificaciones_usuario_id ON notificaciones(usuario_id);
   `,
+
+  // Tablas: rubricas y criterios
+  `
+    CREATE TABLE IF NOT EXISTS rubricas (
+      rubrica_id SERIAL PRIMARY KEY,
+      docente_id INT NOT NULL REFERENCES usuarios(usuario_id) ON DELETE CASCADE,
+      nombre VARCHAR(255) NOT NULL,
+      descripcion TEXT,
+      estado VARCHAR(20) NOT NULL DEFAULT 'activa',
+      fecha_creacion TIMESTAMP DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS rubrica_criterios (
+      criterio_id SERIAL PRIMARY KEY,
+      rubrica_id INT NOT NULL REFERENCES rubricas(rubrica_id) ON DELETE CASCADE,
+      nombre VARCHAR(255) NOT NULL,
+      peso DECIMAL(5,2) NOT NULL CHECK (peso > 0 AND peso <= 100),
+      puntaje_maximo DECIMAL(5,2) NOT NULL DEFAULT 5 CHECK (puntaje_maximo > 0)
+    );
+    CREATE INDEX IF NOT EXISTS idx_rubricas_docente_id ON rubricas(docente_id);
+    CREATE INDEX IF NOT EXISTS idx_rubrica_criterios_rubrica_id ON rubrica_criterios(rubrica_id);
+  `,
+
+  // Tabla: asistencia por practica
+  `
+    CREATE TABLE IF NOT EXISTS asistencia_practica (
+      asistencia_id SERIAL PRIMARY KEY,
+      practica_id INT NOT NULL REFERENCES practicas(practica_id) ON DELETE CASCADE,
+      estudiante_id INT NOT NULL REFERENCES usuarios(usuario_id) ON DELETE CASCADE,
+      docente_id INT NOT NULL REFERENCES usuarios(usuario_id) ON DELETE CASCADE,
+      estado VARCHAR(20) NOT NULL CHECK (estado IN ('presente', 'ausente', 'tarde', 'justificada')),
+      observacion TEXT,
+      fecha_registro TIMESTAMP DEFAULT NOW(),
+      UNIQUE (practica_id, estudiante_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_asistencia_practica_id ON asistencia_practica(practica_id);
+    CREATE INDEX IF NOT EXISTS idx_asistencia_estudiante_id ON asistencia_practica(estudiante_id);
+  `,
 ];
 
 async function runMigrations() {
@@ -207,6 +244,9 @@ async function runMigrations() {
     console.log("  - foros");
     console.log("  - mensajes_foro");
     console.log("  - notificaciones");
+    console.log("  - rubricas");
+    console.log("  - rubrica_criterios");
+    console.log("  - asistencia_practica");
 
   } catch (err) {
     console.error("Error during migrations:", err);
