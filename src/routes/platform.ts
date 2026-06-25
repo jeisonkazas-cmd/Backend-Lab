@@ -20,6 +20,9 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 },
 });
 
+const RESOURCE_TYPES = new Set(["guia", "informe", "simulacion"]);
+const GROUP_STATUSES = new Set(["activo", "inactivo"]);
+
 async function ensureRecursosCatalogoTable() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS recursos_catalogo (
@@ -130,6 +133,19 @@ function mapGrupo(row: any) {
     horario: "",
     salon: "",
     icono: "science",
+  };
+}
+
+function mapAdminGrupo(row: any) {
+  return {
+    id: String(row.grupo_id),
+    nombre: row.nombre || `Grupo ${row.grupo_id}`,
+    descripcion: row.descripcion || "",
+    estado: row.estado || "activo",
+    fechaCreacion: row.fecha_creacion ? formatDate(row.fecha_creacion) : null,
+    estudiantes: Number(row.estudiantes || 0),
+    docentes: Number(row.docentes || 0),
+    practicas: Number(row.practicas || 0),
   };
 }
 
@@ -305,6 +321,102 @@ router.get("/notificaciones/email-status", ...requireRole(["Estudiante", "Docent
       frontendUrl: getFrontendUrl() || null,
       testRecipient: profile.correo || null,
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/admin/grupos", ...requireRole(["Administrador"]), async (_req, res, next) => {
+  try {
+    const result = await pool.query(
+      `SELECT
+         g.grupo_id,
+         g.nombre,
+         g.descripcion,
+         g.estado,
+         g.fecha_creacion,
+         COUNT(DISTINCT ge.usuario_id)
+           FILTER (WHERE COALESCE(ge.estado, 'activo') = 'activo')::int AS estudiantes,
+         COUNT(DISTINCT gd.usuario_id)::int AS docentes,
+         COUNT(DISTINCT p.practica_id)::int AS practicas
+       FROM grupos g
+       LEFT JOIN grupos_estudiantes ge ON ge.grupo_id = g.grupo_id
+       LEFT JOIN grupos_docentes gd ON gd.grupo_id = g.grupo_id
+       LEFT JOIN practicas p ON p.grupo_id = g.grupo_id
+       GROUP BY g.grupo_id
+       ORDER BY g.fecha_creacion DESC, g.grupo_id DESC`
+    );
+
+    res.json(result.rows.map(mapAdminGrupo));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.patch("/admin/grupos/:grupoId", ...requireRole(["Administrador"]), async (req, res, next) => {
+  try {
+    const grupoId = Number(req.params.grupoId);
+    if (!Number.isInteger(grupoId)) {
+      return res.status(400).json({ error: "El grupo no es valido." });
+    }
+
+    const fields: string[] = [];
+    const values: any[] = [];
+    const { nombre, descripcion, estado } = req.body ?? {};
+
+    if (typeof nombre === "string") {
+      const cleanNombre = nombre.trim();
+      if (!cleanNombre) return res.status(400).json({ error: "El nombre del grupo es obligatorio." });
+      values.push(cleanNombre);
+      fields.push(`nombre = $${values.length}`);
+    }
+
+    if (typeof descripcion === "string") {
+      values.push(descripcion.trim() || null);
+      fields.push(`descripcion = $${values.length}`);
+    }
+
+    if (typeof estado === "string") {
+      const cleanEstado = estado.trim().toLowerCase();
+      if (!GROUP_STATUSES.has(cleanEstado)) {
+        return res.status(400).json({ error: "El estado debe ser activo o inactivo." });
+      }
+      values.push(cleanEstado);
+      fields.push(`estado = $${values.length}`);
+    }
+
+    if (fields.length === 0) {
+      return res.status(400).json({ error: "No hay cambios para guardar." });
+    }
+
+    values.push(grupoId);
+    const updated = await pool.query(
+      `UPDATE grupos
+       SET ${fields.join(", ")}
+       WHERE grupo_id = $${values.length}
+       RETURNING grupo_id, nombre, descripcion, estado, fecha_creacion`,
+      values
+    );
+
+    if (updated.rowCount === 0) {
+      return res.status(404).json({ error: "Grupo no encontrado." });
+    }
+
+    res.json(mapAdminGrupo(updated.rows[0]));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.delete("/admin/grupos/:grupoId", ...requireRole(["Administrador"]), async (req, res, next) => {
+  try {
+    const grupoId = Number(req.params.grupoId);
+    if (!Number.isInteger(grupoId)) {
+      return res.status(400).json({ error: "El grupo no es valido." });
+    }
+
+    await pool.query(`UPDATE grupos SET estado = 'inactivo' WHERE grupo_id = $1`, [grupoId]);
+    res.json({ ok: true });
   } catch (err) {
     next(err);
   }
@@ -1203,19 +1315,25 @@ router.post("/admin/recursos", ...requireRole(["Administrador"]), upload.single(
     const laboratorio = String(req.body.laboratorio || "").trim();
 
     if (!titulo) return res.status(400).json({ error: "El titulo es obligatorio." });
-    if (!["guia", "informe"].includes(tipo)) {
-      return res.status(400).json({ error: "El tipo debe ser guia o informe." });
+    if (!RESOURCE_TYPES.has(tipo)) {
+      return res.status(400).json({ error: "El tipo debe ser guia, informe o simulacion." });
     }
     if (!req.file) return res.status(400).json({ error: "Selecciona un archivo." });
 
     const allowedTypes = new Set(["application/pdf", "text/html"]);
-    const isHtmlByName = req.file.originalname.toLowerCase().endsWith(".html");
+    const lowerFilename = req.file.originalname.toLowerCase();
+    const isHtmlByName = lowerFilename.endsWith(".html") || lowerFilename.endsWith(".htm");
     if (!allowedTypes.has(req.file.mimetype) && !isHtmlByName) {
       return res.status(400).json({ error: "Solo se permiten archivos PDF o HTML." });
     }
 
     await ensureRecursosCatalogoTable();
-    const path = `${tipo}s/${laboratorio || "general"}/${Date.now()}_${safeFilename(req.file.originalname)}`;
+    const folderByType: Record<string, string> = {
+      guia: "guias",
+      informe: "informes",
+      simulacion: "simulaciones",
+    };
+    const path = `${folderByType[tipo]}/${laboratorio || "general"}/${Date.now()}_${safeFilename(req.file.originalname)}`;
     const url = await uploadToStorage("recursos_catalogo", path, req.file);
     const created = await pool.query(
       `INSERT INTO recursos_catalogo
@@ -1235,6 +1353,84 @@ router.post("/admin/recursos", ...requireRole(["Administrador"]), upload.single(
     );
 
     res.status(201).json({ id: String(created.rows[0].recurso_id), url });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.patch("/admin/recursos/:recursoId", ...requireRole(["Administrador"]), async (req, res, next) => {
+  try {
+    await ensureRecursosCatalogoTable();
+    const recursoId = Number(req.params.recursoId);
+    if (!Number.isInteger(recursoId)) {
+      return res.status(400).json({ error: "El recurso no es valido." });
+    }
+
+    const fields: string[] = [];
+    const values: any[] = [];
+    const { titulo, tipo, laboratorio, estado } = req.body ?? {};
+
+    if (typeof titulo === "string") {
+      const cleanTitulo = titulo.trim();
+      if (!cleanTitulo) return res.status(400).json({ error: "El titulo es obligatorio." });
+      values.push(cleanTitulo);
+      fields.push(`titulo = $${values.length}`);
+    }
+
+    if (typeof tipo === "string") {
+      const cleanTipo = tipo.trim().toLowerCase();
+      if (!RESOURCE_TYPES.has(cleanTipo)) {
+        return res.status(400).json({ error: "El tipo debe ser guia, informe o simulacion." });
+      }
+      values.push(cleanTipo);
+      fields.push(`tipo = $${values.length}`);
+    }
+
+    if (typeof laboratorio === "string") {
+      values.push(laboratorio.trim() || null);
+      fields.push(`laboratorio = $${values.length}`);
+    }
+
+    if (typeof estado === "string") {
+      const cleanEstado = estado.trim().toLowerCase();
+      if (!GROUP_STATUSES.has(cleanEstado)) {
+        return res.status(400).json({ error: "El estado debe ser activo o inactivo." });
+      }
+      values.push(cleanEstado);
+      fields.push(`estado = $${values.length}`);
+    }
+
+    if (fields.length === 0) {
+      return res.status(400).json({ error: "No hay cambios para guardar." });
+    }
+
+    values.push(recursoId);
+    const updated = await pool.query(
+      `UPDATE recursos_catalogo
+       SET ${fields.join(", ")}
+       WHERE recurso_id = $${values.length}
+       RETURNING *`,
+      values
+    );
+
+    if (updated.rowCount === 0) {
+      return res.status(404).json({ error: "Recurso no encontrado." });
+    }
+
+    const row = updated.rows[0];
+    res.json({
+      id: String(row.recurso_id),
+      sourceId: row.recurso_id,
+      titulo: row.titulo,
+      tipo: row.tipo,
+      laboratorio: row.laboratorio || "",
+      url: row.archivo_url,
+      archivoNombre: row.archivo_nombre || "",
+      mimeType: row.mime_type || "",
+      fechaCreacion: row.fecha_creacion,
+      descargas: 0,
+      estado: row.estado || "activo",
+    });
   } catch (err) {
     next(err);
   }
