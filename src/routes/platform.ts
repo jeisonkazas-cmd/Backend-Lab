@@ -461,10 +461,6 @@ router.post("/docente/grupos", ...requireRole(["Docente", "Administrador"]), asy
     const profile = requireProfile(req);
     const nombre = String(req.body.nombre || "").trim();
     const descripcion = String(req.body.descripcion || "").trim();
-    const correos = String(req.body.estudiantes || "")
-      .split(/[\n,;]+/)
-      .map((correo) => correo.trim().toLowerCase())
-      .filter(Boolean);
 
     if (!nombre) return res.status(400).json({ error: "El nombre del grupo es obligatorio." });
 
@@ -487,35 +483,6 @@ router.post("/docente/grupos", ...requireRole(["Docente", "Administrador"]), asy
       estudiantesAgregados: 0,
       estudiantesNoEncontrados: [] as string[],
     };
-
-    if (correos.length > 0) {
-      const usuarios = await client.query(
-        `SELECT usuario_id, LOWER(correo) AS correo FROM usuarios WHERE LOWER(correo) = ANY($1::text[])`,
-        [[...new Set(correos)]]
-      );
-      const byEmail = new Map(usuarios.rows.map((usuario) => [usuario.correo, usuario.usuario_id]));
-      result.estudiantesNoEncontrados = [...new Set(correos)].filter((correo) => !byEmail.has(correo));
-      const estudianteIds = [...byEmail.values()] as number[];
-
-      for (const usuarioId of estudianteIds) {
-        await client.query(
-          `INSERT INTO grupos_estudiantes (grupo_id, usuario_id, estado)
-           VALUES ($1, $2, 'activo')`,
-          [grupoId, usuarioId]
-        );
-        result.estudiantesAgregados += 1;
-      }
-
-      await notifyUsers(client, {
-        userIds: estudianteIds,
-        tipo: "grupo_asignado",
-        titulo: "Te asignaron a un grupo",
-        mensaje: `Fuiste registrado en el grupo ${nombre}.`,
-        urlAccion: `/estudiante/grupos/${grupoId}/practicas`,
-        origenTipo: "grupo",
-        origenId: grupoId,
-      });
-    }
 
     await client.query("COMMIT");
     res.status(201).json(result);
@@ -561,6 +528,43 @@ router.get("/docente/grupos/:grupoId", ...requireRole(["Docente", "Administrador
   }
 });
 
+router.get("/docente/grupos/:grupoId/estudiantes-disponibles", ...requireRole(["Docente", "Administrador"]), async (req, res, next) => {
+  try {
+    const profile = requireProfile(req);
+    const grupoId = Number(req.params.grupoId);
+    await assertDocenteGrupo(profile.usuario_id, grupoId);
+
+    const result = await pool.query(
+      `SELECT
+         u.usuario_id,
+         u.nombre_completo,
+         u.correo,
+         u.estado,
+         ge.estado AS estado_grupo
+       FROM usuarios u
+       JOIN usuarios_roles ur ON ur.usuario_id = u.usuario_id
+       JOIN roles r ON r.rol_id = ur.rol_id
+       LEFT JOIN grupos_estudiantes ge
+         ON ge.usuario_id = u.usuario_id
+        AND ge.grupo_id = $1
+       WHERE r.nombre = 'Estudiante'
+         AND u.estado = 'activo'
+       ORDER BY u.nombre_completo ASC, u.correo ASC`,
+      [grupoId]
+    );
+
+    res.json(result.rows.map((row) => ({
+      id: String(row.usuario_id),
+      nombre: row.nombre_completo || row.correo || `Estudiante ${row.usuario_id}`,
+      email: row.correo || "",
+      estado: row.estado || "activo",
+      asignado: (row.estado_grupo || "").toLowerCase() === "activo",
+    })));
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.post("/docente/grupos/:grupoId/estudiantes", ...requireRole(["Docente", "Administrador"]), async (req, res, next) => {
   const client = await pool.connect();
   try {
@@ -568,34 +572,50 @@ router.post("/docente/grupos/:grupoId/estudiantes", ...requireRole(["Docente", "
     const grupoId = Number(req.params.grupoId);
     await assertDocenteGrupo(profile.usuario_id, grupoId);
 
+    const estudianteIds = Array.isArray(req.body.estudianteIds)
+      ? [...new Set(req.body.estudianteIds.map((id: any) => Number(id)).filter(Number.isInteger))]
+      : [];
     const correos = String(req.body.estudiantes || req.body.correos || "")
       .split(/[\n,;]+/)
       .map((correo) => correo.trim().toLowerCase())
       .filter(Boolean);
 
-    if (correos.length === 0) {
-      return res.status(400).json({ error: "Ingresa al menos un correo de estudiante." });
+    if (correos.length === 0 && estudianteIds.length === 0) {
+      return res.status(400).json({ error: "Selecciona al menos un estudiante." });
     }
 
     const uniqueEmails = [...new Set(correos)];
-    const usuarios = await client.query(
-      `SELECT u.usuario_id, LOWER(u.correo) AS correo
-       FROM usuarios u
-       JOIN usuarios_roles ur ON ur.usuario_id = u.usuario_id
-       JOIN roles r ON r.rol_id = ur.rol_id
-       WHERE LOWER(u.correo) = ANY($1::text[])
-         AND r.nombre = 'Estudiante'`,
-      [uniqueEmails]
-    );
+    const usuarios = estudianteIds.length > 0
+      ? await client.query(
+        `SELECT u.usuario_id, LOWER(u.correo) AS correo
+         FROM usuarios u
+         JOIN usuarios_roles ur ON ur.usuario_id = u.usuario_id
+         JOIN roles r ON r.rol_id = ur.rol_id
+         WHERE u.usuario_id = ANY($1::int[])
+           AND r.nombre = 'Estudiante'
+           AND u.estado = 'activo'`,
+        [estudianteIds]
+      )
+      : await client.query(
+        `SELECT u.usuario_id, LOWER(u.correo) AS correo
+         FROM usuarios u
+         JOIN usuarios_roles ur ON ur.usuario_id = u.usuario_id
+         JOIN roles r ON r.rol_id = ur.rol_id
+         WHERE LOWER(u.correo) = ANY($1::text[])
+           AND r.nombre = 'Estudiante'
+           AND u.estado = 'activo'`,
+        [uniqueEmails]
+      );
 
     const byEmail = new Map(usuarios.rows.map((usuario) => [usuario.correo, usuario.usuario_id]));
     const estudiantesNoEncontrados = uniqueEmails.filter((correo) => !byEmail.has(correo));
+    const usuariosIds = usuarios.rows.map((usuario) => Number(usuario.usuario_id));
     let estudiantesAgregados = 0;
     let estudiantesExistentes = 0;
     const estudiantesNotificar: number[] = [];
 
     await client.query("BEGIN");
-    for (const usuarioId of byEmail.values()) {
+    for (const usuarioId of usuariosIds) {
       const inserted = await client.query(
         `INSERT INTO grupos_estudiantes (grupo_id, usuario_id, estado)
          SELECT $1, $2, 'activo'
