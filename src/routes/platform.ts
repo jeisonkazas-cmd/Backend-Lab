@@ -71,6 +71,14 @@ async function ensureAcademicToolsTables() {
       fecha_registro TIMESTAMP DEFAULT NOW(),
       UNIQUE (practica_id, estudiante_id)
     );
+    ALTER TABLE practicas
+      ADD COLUMN IF NOT EXISTS rubrica_id INT REFERENCES rubricas(rubrica_id) ON DELETE SET NULL;
+    CREATE TABLE IF NOT EXISTS evaluaciones_criterios (
+      informe_id INT NOT NULL REFERENCES informes(informe_id) ON DELETE CASCADE,
+      criterio_id INT NOT NULL REFERENCES rubrica_criterios(criterio_id) ON DELETE CASCADE,
+      puntaje DECIMAL(5,2) NOT NULL,
+      PRIMARY KEY (informe_id, criterio_id)
+    );
   `);
 }
 
@@ -153,9 +161,18 @@ function mapAdminGrupo(row: any) {
 function mapPractica(row: any, informe?: any, retro?: any) {
   const config = parseJsonConfig(row.configuracion_json);
   const guiaUrl = config.guiaUrl || config.informeUrl || config.plantillaUrl || null;
-  const estado = retro?.calificacion !== undefined && retro?.calificacion !== null
-    ? "calificado"
-    : informe?.estado || "pendiente";
+  const estado = informe !== undefined
+    ? (
+      retro?.calificacion !== undefined && retro?.calificacion !== null
+        ? "calificado"
+        : informe?.estado || "pendiente"
+    )
+    : (
+      row.estado === "cerrada"
+      || (row.fecha_entrega && new Date(row.fecha_entrega).getTime() < Date.now())
+        ? "cerrada"
+        : "activa"
+    );
 
   return {
     id: String(row.practica_id),
@@ -167,6 +184,7 @@ function mapPractica(row: any, informe?: any, retro?: any) {
     estado,
     fechaCreacion: formatDate(row.fecha_publicacion),
     fechaLimite: formatDate(row.fecha_entrega),
+    fechaLimiteIso: row.fecha_entrega ? new Date(row.fecha_entrega).toISOString() : null,
     fechaFin: formatDate(row.fecha_entrega),
     fechaEntrega: formatDate(row.fecha_entrega),
     fecha: formatDate(row.fecha_entrega),
@@ -178,6 +196,12 @@ function mapPractica(row: any, informe?: any, retro?: any) {
     informeEntregadoUrl: informe?.archivo_url || null,
     archivoNombre: informe?.archivo_nombre || null,
     informeId: informe?.informe_id ? String(informe.informe_id) : null,
+    reentregaHabilitada: Boolean(informe?.reentrega_habilitada),
+    puedeEntregar: Boolean(informe?.reentrega_habilitada)
+      || (
+        (!row.fecha_entrega || new Date(row.fecha_entrega).getTime() >= Date.now())
+        && estado !== "calificado"
+      ),
     calificacion: retro?.calificacion ?? null,
     puntaje: retro?.calificacion ?? undefined,
     retroalimentacion: retro?.comentario || "",
@@ -186,6 +210,7 @@ function mapPractica(row: any, informe?: any, retro?: any) {
     tipo: row.url_recurso ? "virtual" : "presencial",
     informesRecibidos: Number(row.informes_recibidos || 0),
     estudiantesAsignados: [],
+    rubricaId: row.rubrica_id ? String(row.rubrica_id) : "",
   };
 }
 
@@ -728,18 +753,34 @@ router.post("/docente/guias", ...requireRole(["Docente", "Administrador"]), uplo
 router.post("/docente/grupos/:grupoId/practicas", ...requireRole(["Docente", "Administrador"]), async (req, res, next) => {
   const client = await pool.connect();
   try {
+    await ensureAcademicToolsTables();
     const profile = requireProfile(req);
     const grupoId = Number(req.params.grupoId);
     await assertDocenteGrupo(profile.usuario_id, grupoId);
 
     const titulo = String(req.body.titulo || "").trim();
     if (!titulo) return res.status(400).json({ error: "El titulo es obligatorio." });
+    const fechaEntrega = new Date(req.body.fecha_entrega);
+    if (!req.body.fecha_entrega || Number.isNaN(fechaEntrega.getTime())) {
+      return res.status(400).json({ error: "La fecha limite es obligatoria." });
+    }
+    if (fechaEntrega.getTime() <= Date.now()) {
+      return res.status(400).json({ error: "La fecha limite debe ser futura." });
+    }
+    const rubricaId = req.body.rubrica_id ? Number(req.body.rubrica_id) : null;
+    if (rubricaId) {
+      const rubrica = await client.query(
+        `SELECT rubrica_id FROM rubricas WHERE rubrica_id = $1 AND docente_id = $2 AND estado = 'activa'`,
+        [rubricaId, profile.usuario_id]
+      );
+      if (!rubrica.rows[0]) return res.status(400).json({ error: "La rubrica seleccionada no es valida." });
+    }
 
     await client.query("BEGIN");
     const practica = await client.query(
       `INSERT INTO practicas
-       (grupo_id, titulo, descripcion, objetivos, instrucciones, fecha_entrega, estado)
-       VALUES ($1, $2, $3, $4, $5, $6, 'activa')
+       (grupo_id, titulo, descripcion, objetivos, instrucciones, fecha_entrega, estado, rubrica_id)
+       VALUES ($1, $2, $3, $4, $5, $6, 'activa', $7)
        RETURNING practica_id`,
       [
         grupoId,
@@ -747,7 +788,8 @@ router.post("/docente/grupos/:grupoId/practicas", ...requireRole(["Docente", "Ad
         req.body.descripcion || null,
         req.body.objetivos || null,
         req.body.instrucciones || null,
-        req.body.fecha_entrega || null,
+        fechaEntrega,
+        rubricaId,
       ]
     );
     const practicaId = practica.rows[0].practica_id;
@@ -794,6 +836,89 @@ router.post("/docente/grupos/:grupoId/practicas", ...requireRole(["Docente", "Ad
   }
 });
 
+router.put("/docente/grupos/:grupoId/practicas/:practicaId", ...requireRole(["Docente", "Administrador"]), async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    await ensureAcademicToolsTables();
+    const profile = requireProfile(req);
+    const grupoId = Number(req.params.grupoId);
+    const practicaId = Number(req.params.practicaId);
+    await assertDocenteGrupo(profile.usuario_id, grupoId);
+
+    const titulo = String(req.body.titulo || "").trim();
+    const fechaEntrega = new Date(req.body.fecha_entrega);
+    if (!titulo) return res.status(400).json({ error: "El titulo es obligatorio." });
+    if (!req.body.fecha_entrega || Number.isNaN(fechaEntrega.getTime())) {
+      return res.status(400).json({ error: "La fecha limite es obligatoria." });
+    }
+    if (fechaEntrega.getTime() <= Date.now()) {
+      return res.status(400).json({ error: "La nueva fecha limite debe ser futura." });
+    }
+    const rubricaId = req.body.rubrica_id ? Number(req.body.rubrica_id) : null;
+    if (rubricaId) {
+      const rubrica = await client.query(
+        `SELECT rubrica_id FROM rubricas WHERE rubrica_id = $1 AND docente_id = $2 AND estado = 'activa'`,
+        [rubricaId, profile.usuario_id]
+      );
+      if (!rubrica.rows[0]) return res.status(400).json({ error: "La rubrica seleccionada no es valida." });
+    }
+
+    await client.query("BEGIN");
+    const updated = await client.query(
+      `UPDATE practicas
+       SET titulo = $3, descripcion = $4, objetivos = $5, instrucciones = $6,
+           fecha_entrega = $7, rubrica_id = $8,
+           estado = CASE WHEN $7 > NOW() THEN 'activa' ELSE estado END
+       WHERE practica_id = $1 AND grupo_id = $2
+       RETURNING practica_id`,
+      [
+        practicaId,
+        grupoId,
+        titulo,
+        req.body.descripcion || null,
+        req.body.objetivos || null,
+        req.body.instrucciones || null,
+        fechaEntrega,
+        rubricaId,
+      ]
+    );
+    if (!updated.rows[0]) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "Practica no encontrada." });
+    }
+
+    const simulation = await client.query(
+      `SELECT simulacion_id FROM simulaciones WHERE practica_id = $1 ORDER BY simulacion_id LIMIT 1`,
+      [practicaId]
+    );
+    const config = JSON.stringify({
+      guiaUrl: req.body.guiaUrl || null,
+      guiaNombre: req.body.guiaNombre || null,
+    });
+    if (simulation.rows[0]) {
+      await client.query(
+        `UPDATE simulaciones
+         SET titulo = $2, descripcion = $3, url_recurso = $4, configuracion_json = $5
+         WHERE simulacion_id = $1`,
+        [
+          simulation.rows[0].simulacion_id,
+          req.body.simulacionTitulo || titulo,
+          req.body.simulacionDescripcion || null,
+          req.body.simuladorUrl || null,
+          config,
+        ]
+      );
+    }
+    await client.query("COMMIT");
+    res.json({ ok: true });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    next(err);
+  } finally {
+    client.release();
+  }
+});
+
 router.get("/docente/practicas/:practicaId/informes", ...requireRole(["Docente", "Administrador"]), async (req, res, next) => {
   try {
     const profile = requireProfile(req);
@@ -804,11 +929,13 @@ router.get("/docente/practicas/:practicaId/informes", ...requireRole(["Docente",
     const result = await pool.query(
       `SELECT
          i.*,
+         p.rubrica_id,
          u.nombre_completo,
          u.correo,
          r.calificacion,
          r.comentario
        FROM informes i
+       JOIN practicas p ON p.practica_id = i.practica_id
        LEFT JOIN usuarios u ON u.usuario_id = i.estudiante_id
        LEFT JOIN retroalimentaciones r ON r.informe_id = i.informe_id
        WHERE i.practica_id = $1
@@ -830,6 +957,7 @@ router.get("/docente/practicas/:practicaId/informes", ...requireRole(["Docente",
       archivoNombre: row.archivo_nombre || "",
       observaciones: row.observaciones_estudiante || "",
       facultad: "Laboratorio de Fisica",
+      reentregaHabilitada: Boolean(row.reentrega_habilitada),
     })));
   } catch (err) {
     console.error("Error en GET /api/platform/docente/practicas/:practicaId/informes:", err);
@@ -839,6 +967,7 @@ router.get("/docente/practicas/:practicaId/informes", ...requireRole(["Docente",
 
 router.get("/docente/informes/:informeId", ...requireRole(["Docente", "Administrador"]), async (req, res, next) => {
   try {
+    await ensureAcademicToolsTables();
     const informeId = Number(req.params.informeId);
     const informe = await pool.query(`SELECT practica_id FROM informes WHERE informe_id = $1`, [informeId]);
     if (!informe.rows[0]) return res.status(404).json({ error: "Informe no encontrado." });
@@ -847,11 +976,13 @@ router.get("/docente/informes/:informeId", ...requireRole(["Docente", "Administr
     const result = await pool.query(
       `SELECT
          i.*,
+         p.rubrica_id,
          u.nombre_completo,
          u.correo,
          r.calificacion,
          r.comentario
        FROM informes i
+       JOIN practicas p ON p.practica_id = i.practica_id
        LEFT JOIN usuarios u ON u.usuario_id = i.estudiante_id
        LEFT JOIN retroalimentaciones r ON r.informe_id = i.informe_id
        WHERE i.informe_id = $1
@@ -860,6 +991,26 @@ router.get("/docente/informes/:informeId", ...requireRole(["Docente", "Administr
     );
 
     const row = result.rows[0];
+    let rubrica = null;
+    if (row.rubrica_id) {
+      const rubricResult = await pool.query(
+        `SELECT r.rubrica_id, r.nombre, r.descripcion,
+                COALESCE(json_agg(json_build_object(
+                  'id', rc.criterio_id,
+                  'nombre', rc.nombre,
+                  'peso', rc.peso,
+                  'puntajeMaximo', rc.puntaje_maximo,
+                  'puntaje', ec.puntaje
+                ) ORDER BY rc.criterio_id) FILTER (WHERE rc.criterio_id IS NOT NULL), '[]'::json) AS criterios
+         FROM rubricas r
+         LEFT JOIN rubrica_criterios rc ON rc.rubrica_id = r.rubrica_id
+         LEFT JOIN evaluaciones_criterios ec ON ec.criterio_id = rc.criterio_id AND ec.informe_id = $2
+         WHERE r.rubrica_id = $1
+         GROUP BY r.rubrica_id`,
+        [row.rubrica_id, informeId]
+      );
+      rubrica = rubricResult.rows[0] || null;
+    }
     void informesResponse;
     res.json({
       id: String(row.informe_id),
@@ -875,7 +1026,32 @@ router.get("/docente/informes/:informeId", ...requireRole(["Docente", "Administr
       archivoNombre: row.archivo_nombre || "",
       observaciones: row.observaciones_estudiante || "",
       facultad: "Laboratorio de Fisica",
+      reentregaHabilitada: Boolean(row.reentrega_habilitada),
+      rubrica,
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.put("/docente/informes/:informeId/reentrega", ...requireRole(["Docente", "Administrador"]), async (req, res, next) => {
+  try {
+    const profile = requireProfile(req);
+    const informeId = Number(req.params.informeId);
+    const habilitada = req.body.habilitada === true;
+    const informe = await pool.query(
+      `SELECT practica_id FROM informes WHERE informe_id = $1`,
+      [informeId]
+    );
+    if (!informe.rows[0]) return res.status(404).json({ error: "Informe no encontrado." });
+
+    const grupoId = await getPracticaGrupo(Number(informe.rows[0].practica_id));
+    await assertDocenteGrupo(profile.usuario_id, grupoId);
+    await pool.query(
+      `UPDATE informes SET reentrega_habilitada = $2, fecha_actualizacion = NOW() WHERE informe_id = $1`,
+      [informeId, habilitada]
+    );
+    res.json({ ok: true, reentregaHabilitada: habilitada });
   } catch (err) {
     next(err);
   }
@@ -884,10 +1060,12 @@ router.get("/docente/informes/:informeId", ...requireRole(["Docente", "Administr
 router.put("/docente/informes/:informeId/calificacion", ...requireRole(["Docente", "Administrador"]), async (req, res, next) => {
   const client = await pool.connect();
   try {
+    await ensureAcademicToolsTables();
     const profile = requireProfile(req);
     const informeId = Number(req.params.informeId);
     const nota = Number(req.body.nota);
     const comentario = String(req.body.comentario || "");
+    const criterios = Array.isArray(req.body.criterios) ? req.body.criterios : [];
 
     if (Number.isNaN(nota) || nota < 0 || nota > 5) {
       return res.status(400).json({ error: "La nota debe estar entre 0 y 5." });
@@ -926,8 +1104,30 @@ router.put("/docente/informes/:informeId/calificacion", ...requireRole(["Docente
       );
     }
 
+    if (criterios.length > 0) {
+      await client.query(`DELETE FROM evaluaciones_criterios WHERE informe_id = $1`, [informeId]);
+      for (const criterio of criterios) {
+        const criterioId = Number(criterio.id);
+        const puntaje = Number(criterio.puntaje);
+        if (!Number.isFinite(criterioId) || !Number.isFinite(puntaje)) {
+          throw new Error("Los puntajes de la rubrica no son validos.");
+        }
+        await client.query(
+          `INSERT INTO evaluaciones_criterios (informe_id, criterio_id, puntaje)
+           SELECT $1, rc.criterio_id, $3
+           FROM rubrica_criterios rc
+           JOIN practicas p ON p.rubrica_id = rc.rubrica_id
+           JOIN informes i ON i.practica_id = p.practica_id
+           WHERE i.informe_id = $1 AND rc.criterio_id = $2`,
+          [informeId, criterioId, puntaje]
+        );
+      }
+    }
+
     await client.query(
-      `UPDATE informes SET estado = 'calificado', fecha_actualizacion = NOW() WHERE informe_id = $1`,
+      `UPDATE informes
+       SET estado = 'calificado', reentrega_habilitada = FALSE, fecha_actualizacion = NOW()
+       WHERE informe_id = $1`,
       [informeId]
     );
     await notifyUsers(client, {
@@ -987,6 +1187,7 @@ router.get("/estudiante/grupos/:grupoId/practicas", ...requireRole(["Estudiante"
     await assertEstudianteGrupo(profile.usuario_id, grupoId);
     const result = await pool.query(
       `SELECT p.*, s.url_recurso, s.configuracion_json, i.informe_id, i.archivo_url, i.archivo_nombre, i.estado AS informe_estado,
+              i.reentrega_habilitada,
               r.calificacion, r.comentario
        FROM practicas p
        LEFT JOIN simulaciones s ON s.practica_id = p.practica_id
@@ -1002,6 +1203,7 @@ router.get("/estudiante/grupos/:grupoId/practicas", ...requireRole(["Estudiante"
       archivo_url: row.archivo_url,
       archivo_nombre: row.archivo_nombre,
       estado: row.informe_estado,
+      reentrega_habilitada: row.reentrega_habilitada,
     }, {
       calificacion: row.calificacion,
       comentario: row.comentario,
@@ -1020,6 +1222,7 @@ router.get("/estudiante/practicas/:practicaId", ...requireRole(["Estudiante", "A
     await assertEstudianteGrupo(profile.usuario_id, grupoId);
     const result = await pool.query(
       `SELECT p.*, s.url_recurso, s.configuracion_json, i.informe_id, i.archivo_url, i.archivo_nombre, i.estado AS informe_estado,
+              i.reentrega_habilitada,
               r.calificacion, r.comentario,
               a.estado AS asistencia_estado, a.observacion AS asistencia_observacion
        FROM practicas p
@@ -1039,6 +1242,7 @@ router.get("/estudiante/practicas/:practicaId", ...requireRole(["Estudiante", "A
       archivo_url: row.archivo_url,
       archivo_nombre: row.archivo_nombre,
       estado: row.informe_estado,
+      reentrega_habilitada: row.reentrega_habilitada,
     }, {
       calificacion: row.calificacion,
       comentario: row.comentario,
@@ -1061,25 +1265,46 @@ router.post("/estudiante/practicas/:practicaId/informes", ...requireRole(["Estud
       return res.status(400).json({ error: "Solo se permiten PDF." });
     }
 
+    const existing = await client.query(
+      `SELECT i.informe_id, i.estado, i.reentrega_habilitada, p.fecha_entrega
+       FROM practicas p
+       LEFT JOIN informes i ON i.practica_id = p.practica_id AND i.estudiante_id = $2
+       WHERE p.practica_id = $1
+       LIMIT 1`,
+      [practicaId, profile.usuario_id]
+    );
+    const submission = existing.rows[0];
+    if (!submission) return res.status(404).json({ error: "Practica no encontrada." });
+
+    const reentregaHabilitada = Boolean(submission.reentrega_habilitada);
+    const fechaVencida = submission.fecha_entrega
+      && new Date(submission.fecha_entrega).getTime() < Date.now();
+    if (!reentregaHabilitada && submission.estado === "calificado") {
+      return res.status(409).json({
+        error: "El informe ya fue calificado. El docente debe habilitar una nueva entrega.",
+      });
+    }
+    if (!reentregaHabilitada && fechaVencida) {
+      return res.status(409).json({ error: "La fecha limite de entrega ya vencio." });
+    }
+
     const path = `${profile.usuario_id}/${practicaId}/${Date.now()}_${safeFilename(req.file.originalname)}`;
     const archivoUrl = await uploadToStorage("informes", path, req.file);
 
     await client.query("BEGIN");
-    const existing = await client.query(
-      `SELECT informe_id FROM informes WHERE practica_id = $1 AND estudiante_id = $2 LIMIT 1`,
-      [practicaId, profile.usuario_id]
-    );
 
     let informeId: number;
-    if (existing.rows[0]) {
+    if (submission.informe_id) {
       const updated = await client.query(
         `UPDATE informes
-         SET archivo_url = $2, archivo_nombre = $3, estado = 'entregado', fecha_actualizacion = NOW()
+         SET archivo_url = $2, archivo_nombre = $3, estado = 'entregado',
+             reentrega_habilitada = FALSE, fecha_entrega = NOW(), fecha_actualizacion = NOW()
          WHERE informe_id = $1
          RETURNING informe_id`,
-        [existing.rows[0].informe_id, archivoUrl, req.file.originalname]
+        [submission.informe_id, archivoUrl, req.file.originalname]
       );
       informeId = Number(updated.rows[0].informe_id);
+      await client.query(`DELETE FROM retroalimentaciones WHERE informe_id = $1`, [informeId]);
     } else {
       const inserted = await client.query(
         `INSERT INTO informes (practica_id, estudiante_id, archivo_url, archivo_nombre, estado)

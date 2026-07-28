@@ -114,6 +114,8 @@ const migrations = [
     );
     CREATE INDEX IF NOT EXISTS idx_informes_practica_id ON informes(practica_id);
     CREATE INDEX IF NOT EXISTS idx_informes_estudiante_id ON informes(estudiante_id);
+    ALTER TABLE informes
+      ADD COLUMN IF NOT EXISTS reentrega_habilitada BOOLEAN NOT NULL DEFAULT FALSE;
   `,
 
   // Tabla: retroalimentaciones
@@ -193,6 +195,14 @@ const migrations = [
     );
     CREATE INDEX IF NOT EXISTS idx_rubricas_docente_id ON rubricas(docente_id);
     CREATE INDEX IF NOT EXISTS idx_rubrica_criterios_rubrica_id ON rubrica_criterios(rubrica_id);
+    ALTER TABLE practicas
+      ADD COLUMN IF NOT EXISTS rubrica_id INT REFERENCES rubricas(rubrica_id) ON DELETE SET NULL;
+    CREATE TABLE IF NOT EXISTS evaluaciones_criterios (
+      informe_id INT NOT NULL REFERENCES informes(informe_id) ON DELETE CASCADE,
+      criterio_id INT NOT NULL REFERENCES rubrica_criterios(criterio_id) ON DELETE CASCADE,
+      puntaje DECIMAL(5,2) NOT NULL,
+      PRIMARY KEY (informe_id, criterio_id)
+    );
   `,
 
   // Tabla: asistencia por practica
