@@ -10,6 +10,7 @@ import {
   requireProfile,
   requireRole,
   safeFilename,
+  safeStorageSegment,
   sendNotificationEmail,
   uploadToStorage,
 } from "./platform-utils";
@@ -1353,7 +1354,8 @@ router.post("/admin/recursos", ...requireRole(["Administrador"]), upload.single(
       informe: "informes",
       simulacion: "simulaciones",
     };
-    const path = `${folderByType[tipo]}/${laboratorio || "general"}/${Date.now()}_${safeFilename(req.file.originalname)}`;
+    const storageFolder = safeStorageSegment(laboratorio || "general");
+    const path = `${folderByType[tipo]}/${storageFolder}/${Date.now()}_${safeFilename(req.file.originalname)}`;
     const url = await uploadToStorage("recursos_catalogo", path, req.file);
     const created = await pool.query(
       `INSERT INTO recursos_catalogo

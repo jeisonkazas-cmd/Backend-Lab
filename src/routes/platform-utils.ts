@@ -50,6 +50,19 @@ export function safeFilename(name: string) {
   return name.replace(/[^\w.\-]+/g, "_");
 }
 
+export function safeStorageSegment(value: string, fallback = "general") {
+  const normalized = value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/[^a-zA-Z0-9._-]+/g, "")
+    .replace(/-+/g, "-")
+    .replace(/^[-_.]+|[-_.]+$/g, "")
+    .toLowerCase();
+
+  return normalized || fallback;
+}
+
 export function requireProfile(req: any) {
   if (!req.supabaseProfile?.usuario_id) {
     throw new Error("No se encontro perfil autenticado.");
