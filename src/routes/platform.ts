@@ -73,6 +73,8 @@ async function ensureAcademicToolsTables() {
     );
     ALTER TABLE practicas
       ADD COLUMN IF NOT EXISTS rubrica_id INT REFERENCES rubricas(rubrica_id) ON DELETE SET NULL;
+    ALTER TABLE informes
+      ADD COLUMN IF NOT EXISTS reentrega_habilitada BOOLEAN NOT NULL DEFAULT FALSE;
     CREATE TABLE IF NOT EXISTS evaluaciones_criterios (
       informe_id INT NOT NULL REFERENCES informes(informe_id) ON DELETE CASCADE,
       criterio_id INT NOT NULL REFERENCES rubrica_criterios(criterio_id) ON DELETE CASCADE,
@@ -1182,6 +1184,7 @@ router.get("/estudiante/grupos/:grupoId", ...requireRole(["Estudiante", "Adminis
 
 router.get("/estudiante/grupos/:grupoId/practicas", ...requireRole(["Estudiante", "Administrador"]), async (req, res, next) => {
   try {
+    await ensureAcademicToolsTables();
     const profile = requireProfile(req);
     const grupoId = Number(req.params.grupoId);
     await assertEstudianteGrupo(profile.usuario_id, grupoId);
