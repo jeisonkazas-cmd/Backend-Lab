@@ -14,8 +14,10 @@ const migrations = [
       correo VARCHAR(255) UNIQUE NOT NULL,
       nombre_completo VARCHAR(255) NOT NULL,
       estado VARCHAR(20) DEFAULT 'activo',
-      fecha_creacion TIMESTAMP DEFAULT NOW()
+      fecha_creacion TIMESTAMP DEFAULT NOW(),
+      ultimo_acceso TIMESTAMPTZ
     );
+    ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS ultimo_acceso TIMESTAMPTZ;
     CREATE INDEX IF NOT EXISTS idx_usuarios_entra_oid ON usuarios(entra_oid);
   `,
 

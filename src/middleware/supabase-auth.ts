@@ -2,6 +2,44 @@
 import { pool } from "../db";
 import jwt from "jsonwebtoken";
 
+let ensureLastAccessColumnPromise: Promise<void> | null = null;
+
+export function ensureUserLastAccessColumn(): Promise<void> {
+  if (!ensureLastAccessColumnPromise) {
+    ensureLastAccessColumnPromise = pool.query(
+      `ALTER TABLE usuarios
+       ADD COLUMN IF NOT EXISTS ultimo_acceso TIMESTAMPTZ`
+    ).then(() => undefined).catch((error) => {
+      ensureLastAccessColumnPromise = null;
+      throw error;
+    });
+  }
+  return ensureLastAccessColumnPromise;
+}
+
+async function recordUserAccess(entraOid: string) {
+  await ensureUserLastAccessColumn();
+  await pool.query(
+    `UPDATE usuarios
+     SET ultimo_acceso = NOW()
+     WHERE entra_oid = $1
+       AND (
+         ultimo_acceso IS NULL
+         OR ultimo_acceso < NOW() - INTERVAL '5 minutes'
+       )`,
+    [entraOid]
+  );
+}
+
+async function finishAuthentication(req: Request, entraOid: string, email?: string) {
+  req.supabaseUser = { sub: entraOid, email };
+  try {
+    await recordUserAccess(entraOid);
+  } catch (error) {
+    console.warn("No se pudo registrar el ultimo acceso del usuario:", error);
+  }
+}
+
 function getBearerToken(req: Request): string | null {
   const header = req.headers.authorization;
   if (!header) return null;
@@ -153,16 +191,17 @@ export async function requireSupabaseAuth(
 
     const emailClaim = payload.email;
 
-    req.supabaseUser = {
+    await finishAuthentication(
+      req,
       sub,
-      email: typeof emailClaim === "string" ? emailClaim : undefined,
-    };
+      typeof emailClaim === "string" ? emailClaim : undefined
+    );
 
     return next();
   } catch (err) {
     try {
       const fallbackUser = await validateTokenWithSupabaseAuthApi(token);
-      req.supabaseUser = fallbackUser;
+      await finishAuthentication(req, fallbackUser.sub, fallbackUser.email);
       return next();
     } catch (fallbackErr) {
       console.error("Error verificando JWT Supabase:", err);

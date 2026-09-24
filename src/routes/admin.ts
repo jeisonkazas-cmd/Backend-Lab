@@ -1,6 +1,10 @@
 import { Router } from "express";
 import { pool } from "../db";
-import { requireSupabaseAuth, requireSupabaseRole } from "../middleware/supabase-auth";
+import {
+  ensureUserLastAccessColumn,
+  requireSupabaseAuth,
+  requireSupabaseRole,
+} from "../middleware/supabase-auth";
 
 const router = Router();
 
@@ -10,6 +14,7 @@ router.use(requireSupabaseRole(["Administrador"]));
 
 router.get("/usuarios", async (_req, res) => {
   try {
+    await ensureUserLastAccessColumn();
     const result = await pool.query(
       `SELECT
          u.usuario_id AS id,
@@ -17,40 +22,40 @@ router.get("/usuarios", async (_req, res) => {
          u.nombre_completo AS nombre,
          u.estado,
          r.nombre AS rol,
-         u.created_at AS "fechaRegistro"
+         u.fecha_creacion AS "fechaRegistro",
+         GREATEST(u.ultimo_acceso, au.last_sign_in_at) AS "ultimoAcceso"
        FROM usuarios u
        LEFT JOIN usuarios_roles ur ON ur.usuario_id = u.usuario_id
        LEFT JOIN roles r ON r.rol_id = ur.rol_id
+       LEFT JOIN auth.users au ON au.id::text = u.entra_oid
        ORDER BY u.usuario_id ASC`
     );
 
     res.json(result.rows);
   } catch (err: any) {
-    // Fallback si no existe created_at
-    if (String(err?.message || "").includes("created_at")) {
-      try {
-        const result2 = await pool.query(
-          `SELECT
-             u.usuario_id AS id,
-             u.correo AS email,
-             u.nombre_completo AS nombre,
-             u.estado,
-             r.nombre AS rol,
-             NULL::timestamptz AS "fechaRegistro"
-           FROM usuarios u
-           LEFT JOIN usuarios_roles ur ON ur.usuario_id = u.usuario_id
-           LEFT JOIN roles r ON r.rol_id = ur.rol_id
-           ORDER BY u.usuario_id ASC`
-        );
-        return res.json(result2.rows);
-      } catch (err2) {
-        console.error("Error listando usuarios (fallback):", err2);
-        return res.status(500).json({ error: "Error interno del servidor" });
-      }
+    // Algunas instalaciones pueden impedir consultar el esquema auth. En ese
+    // caso se conserva el seguimiento local de actividad de la plataforma.
+    try {
+      const fallback = await pool.query(
+        `SELECT
+           u.usuario_id AS id,
+           u.correo AS email,
+           u.nombre_completo AS nombre,
+           u.estado,
+           r.nombre AS rol,
+           u.fecha_creacion AS "fechaRegistro",
+           u.ultimo_acceso AS "ultimoAcceso"
+         FROM usuarios u
+         LEFT JOIN usuarios_roles ur ON ur.usuario_id = u.usuario_id
+         LEFT JOIN roles r ON r.rol_id = ur.rol_id
+         ORDER BY u.usuario_id ASC`
+      );
+      return res.json(fallback.rows);
+    } catch (fallbackError) {
+      console.error("Error listando usuarios:", err);
+      console.error("Error listando usuarios (fallback):", fallbackError);
+      return res.status(500).json({ error: "Error interno del servidor" });
     }
-
-    console.error("Error listando usuarios:", err);
-    return res.status(500).json({ error: "Error interno del servidor" });
   }
 });
 
