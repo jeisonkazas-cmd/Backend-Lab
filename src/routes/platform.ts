@@ -86,7 +86,13 @@ async function ensureAcademicToolsTables() {
 
 async function assertDocenteGrupo(docenteId: number, grupoId: number) {
   const { rowCount } = await pool.query(
-    `SELECT 1 FROM grupos_docentes WHERE usuario_id = $1 AND grupo_id = $2 LIMIT 1`,
+    `SELECT 1
+     FROM grupos_docentes gd
+     JOIN grupos g ON g.grupo_id = gd.grupo_id
+     WHERE gd.usuario_id = $1
+       AND gd.grupo_id = $2
+       AND COALESCE(g.estado, 'activo') = 'activo'
+     LIMIT 1`,
     [docenteId, grupoId]
   );
 
@@ -100,8 +106,12 @@ async function assertDocenteGrupo(docenteId: number, grupoId: number) {
 async function assertEstudianteGrupo(estudianteId: number, grupoId: number) {
   const { rowCount } = await pool.query(
     `SELECT 1
-     FROM grupos_estudiantes
-     WHERE usuario_id = $1 AND grupo_id = $2 AND COALESCE(estado, 'activo') = 'activo'
+     FROM grupos_estudiantes ge
+     JOIN grupos g ON g.grupo_id = ge.grupo_id
+     WHERE ge.usuario_id = $1
+       AND ge.grupo_id = $2
+       AND COALESCE(ge.estado, 'activo') = 'activo'
+       AND COALESCE(g.estado, 'activo') = 'activo'
      LIMIT 1`,
     [estudianteId, grupoId]
   );
@@ -500,6 +510,7 @@ router.get("/docente/grupos", ...requireRole(["Docente", "Administrador"]), asyn
        FROM grupos g
        JOIN grupos_docentes gd ON gd.grupo_id = g.grupo_id
        WHERE gd.usuario_id = $1
+         AND COALESCE(g.estado, 'activo') = 'activo'
        ORDER BY g.nombre ASC`,
       [profile.usuario_id]
     );
@@ -1243,10 +1254,12 @@ router.get("/estudiante/grupos", ...requireRole(["Estudiante", "Administrador"])
   try {
     const profile = requireProfile(req);
     const result = await pool.query(
-      `SELECT g.*, COALESCE(ge.estado, g.estado, 'activo') AS estado_link
+      `SELECT g.*, 'activo' AS estado_link
        FROM grupos_estudiantes ge
        JOIN grupos g ON g.grupo_id = ge.grupo_id
        WHERE ge.usuario_id = $1
+         AND COALESCE(ge.estado, 'activo') = 'activo'
+         AND COALESCE(g.estado, 'activo') = 'activo'
        ORDER BY g.nombre ASC`,
       [profile.usuario_id]
     );
