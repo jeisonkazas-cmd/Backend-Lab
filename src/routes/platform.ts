@@ -167,17 +167,29 @@ function mapAdminGrupo(row: any) {
     estudiantes: Number(row.estudiantes || 0),
     docentes: Number(row.docentes || 0),
     practicas: Number(row.practicas || 0),
+    docentesDetalle: Array.isArray(row.docentes_detalle) ? row.docentes_detalle : [],
+    estudiantesDetalle: Array.isArray(row.estudiantes_detalle) ? row.estudiantes_detalle : [],
   };
 }
 
 function mapPractica(row: any, informe?: any, retro?: any) {
   const config = parseJsonConfig(row.configuracion_json);
   const guiaUrl = config.guiaUrl || config.informeUrl || config.plantillaUrl || null;
+  const informeEstado = String(informe?.estado || "").trim().toLowerCase();
+  const hasGrade = retro?.calificacion !== undefined && retro?.calificacion !== null;
+  const hasSubmission = Boolean(
+    informe?.informe_id
+    || informe?.archivo_url
+    || informe?.archivo_nombre
+    || ["entregado", "entregada", "enviado", "enviada", "submitted", "pendiente_revision"].includes(informeEstado)
+  );
   const estado = informe !== undefined
     ? (
-      retro?.calificacion !== undefined && retro?.calificacion !== null
+      hasGrade || ["calificado", "calificada", "evaluado", "evaluada", "graded"].includes(informeEstado)
         ? "calificado"
-        : informe?.estado || "pendiente"
+        : hasSubmission
+          ? "entregado"
+          : "pendiente"
     )
     : (
       row.estado === "cerrada"
@@ -404,7 +416,34 @@ router.get("/admin/grupos", ...requireRole(["Administrador"]), async (_req, res,
          COUNT(DISTINCT ge.usuario_id)
            FILTER (WHERE COALESCE(ge.estado, 'activo') = 'activo')::int AS estudiantes,
          COUNT(DISTINCT gd.usuario_id)::int AS docentes,
-         COUNT(DISTINCT p.practica_id)::int AS practicas
+         COUNT(DISTINCT p.practica_id)::int AS practicas,
+         COALESCE((
+           SELECT jsonb_agg(
+             jsonb_build_object(
+               'id', u.usuario_id,
+               'nombre', u.nombre_completo,
+               'correo', u.correo
+             )
+             ORDER BY u.nombre_completo
+           )
+           FROM grupos_docentes gd_detalle
+           JOIN usuarios u ON u.usuario_id = gd_detalle.usuario_id
+           WHERE gd_detalle.grupo_id = g.grupo_id
+         ), '[]'::jsonb) AS docentes_detalle,
+         COALESCE((
+           SELECT jsonb_agg(
+             jsonb_build_object(
+               'id', u.usuario_id,
+               'nombre', u.nombre_completo,
+               'correo', u.correo
+             )
+             ORDER BY u.nombre_completo
+           )
+           FROM grupos_estudiantes ge_detalle
+           JOIN usuarios u ON u.usuario_id = ge_detalle.usuario_id
+           WHERE ge_detalle.grupo_id = g.grupo_id
+             AND COALESCE(ge_detalle.estado, 'activo') = 'activo'
+         ), '[]'::jsonb) AS estudiantes_detalle
        FROM grupos g
        LEFT JOIN grupos_estudiantes ge ON ge.grupo_id = g.grupo_id
        LEFT JOIN grupos_docentes gd ON gd.grupo_id = g.grupo_id
