@@ -309,6 +309,34 @@ router.patch("/notificaciones/leidas", ...requireRole(["Estudiante", "Docente", 
   }
 });
 
+router.delete("/notificaciones/:notificacionId", ...requireRole(["Estudiante", "Docente", "Administrador"]), async (req, res, next) => {
+  try {
+    const profile = requireProfile(req);
+    const notificacionId = Number(req.params.notificacionId);
+    if (!Number.isInteger(notificacionId)) {
+      return res.status(400).json({ error: "La notificacion no es valida." });
+    }
+
+    await pool.query(
+      `DELETE FROM notificaciones WHERE notificacion_id = $1 AND usuario_id = $2`,
+      [notificacionId, profile.usuario_id]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.delete("/notificaciones", ...requireRole(["Estudiante", "Docente", "Administrador"]), async (req, res, next) => {
+  try {
+    const profile = requireProfile(req);
+    await pool.query(`DELETE FROM notificaciones WHERE usuario_id = $1`, [profile.usuario_id]);
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.post("/notificaciones/test-email", ...requireRole(["Estudiante", "Docente", "Administrador"]), async (req, res, next) => {
   try {
     const profile = requireProfile(req);
@@ -514,6 +542,66 @@ router.post("/docente/grupos", ...requireRole(["Docente", "Administrador"]), asy
 
     await client.query("COMMIT");
     res.status(201).json(result);
+  } catch (err) {
+    await client.query("ROLLBACK");
+    next(err);
+  } finally {
+    client.release();
+  }
+});
+
+router.patch("/docente/grupos/:grupoId", ...requireRole(["Docente", "Administrador"]), async (req, res, next) => {
+  try {
+    const profile = requireProfile(req);
+    const grupoId = Number(req.params.grupoId);
+    await assertDocenteGrupo(profile.usuario_id, grupoId);
+
+    const nombre = String(req.body.nombre || "").trim();
+    const descripcion = String(req.body.descripcion || "").trim();
+    if (!nombre) return res.status(400).json({ error: "El nombre del grupo es obligatorio." });
+
+    const updated = await pool.query(
+      `UPDATE grupos
+       SET nombre = $2, descripcion = $3
+       WHERE grupo_id = $1
+       RETURNING grupo_id`,
+      [grupoId, nombre, descripcion || null]
+    );
+    if (!updated.rows[0]) return res.status(404).json({ error: "Grupo no encontrado." });
+    res.json({ ok: true, grupoId: String(grupoId) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/docente/grupos/:grupoId/recordatorio", ...requireRole(["Docente", "Administrador"]), async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    const profile = requireProfile(req);
+    const grupoId = Number(req.params.grupoId);
+    await assertDocenteGrupo(profile.usuario_id, grupoId);
+
+    const [grupo, estudiantes] = await Promise.all([
+      client.query(`SELECT nombre FROM grupos WHERE grupo_id = $1`, [grupoId]),
+      client.query(
+        `SELECT usuario_id FROM grupos_estudiantes
+         WHERE grupo_id = $1 AND COALESCE(estado, 'activo') = 'activo'`,
+        [grupoId]
+      ),
+    ]);
+    const userIds = estudiantes.rows.map((row) => Number(row.usuario_id));
+    await client.query("BEGIN");
+    await notifyUsers(client, {
+      userIds,
+      tipo: "recordatorio_grupo",
+      titulo: "Recordatorio del docente",
+      mensaje: `Revisa las practicas pendientes del grupo ${grupo.rows[0]?.nombre || `Grupo ${grupoId}`}.`,
+      urlAccion: `/estudiante/grupos/${grupoId}/practicas`,
+      origenTipo: "grupo",
+      origenId: grupoId,
+    });
+    await client.query("COMMIT");
+    res.json({ ok: true, destinatarios: userIds.length });
   } catch (err) {
     await client.query("ROLLBACK");
     next(err);
@@ -869,8 +957,8 @@ router.put("/docente/grupos/:grupoId/practicas/:practicaId", ...requireRole(["Do
     const updated = await client.query(
       `UPDATE practicas
        SET titulo = $3, descripcion = $4, objetivos = $5, instrucciones = $6,
-           fecha_entrega = $7, rubrica_id = $8,
-           estado = CASE WHEN $7 > NOW() THEN 'activa' ELSE estado END
+           fecha_entrega = $7::timestamptz, rubrica_id = $8,
+           estado = CASE WHEN $7::timestamptz > NOW() THEN 'activa' ELSE estado END
        WHERE practica_id = $1 AND grupo_id = $2
        RETURNING practica_id`,
       [
